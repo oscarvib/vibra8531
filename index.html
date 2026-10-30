@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e8711a">
+<title>Vibra 8531</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f3f4f6;--card:#fff;--fg:#1b2230;--muted:#687385;--line:#dfe3e8;--grid:#ebeef2;--plot:#fff;
+--acc:#e8711a;--acc2:#1f6fd1;--ok:#1d9a5b;--warn:#c58a12;--err:#c9362c;--ref:#9aa3af;
+--dH:#d9473b;--dV:#2f6fd6;--dA:#1d9a5b;--zA:#1d9a5b;--zB:#7fb33a;--zC:#e0a21b;--zD:#d9473b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1217;--card:#161b22;--fg:#e5e9ef;--muted:#8d97a6;--line:#29303a;--grid:#212831;--plot:#11161c;--ref:#5d6672;--dH:#ff6b5e;--dV:#5b9dff;--dA:#3ccf86}}
+:root[data-theme="dark"]{--bg:#0e1217;--card:#161b22;--fg:#e5e9ef;--muted:#8d97a6;--line:#29303a;--grid:#212831;--plot:#11161c;--ref:#5d6672;--dH:#ff6b5e;--dV:#5b9dff;--dA:#3ccf86}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+header{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;align-items:center;gap:10px}
+header h1{font-size:17px;margin:0;font-weight:700;letter-spacing:-.01em;cursor:pointer}
+header h1 b{color:var(--acc)}
+header .sp{flex:1}
+.chip{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--grid);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw}
+.chip.on{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.chip.busy{background:color-mix(in srgb,var(--acc) 20%,transparent);color:var(--acc)}
+main{max-width:1200px;margin:0 auto;padding:12px 16px 90px}
+.crumbs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:13.5px;color:var(--muted);margin:2px 0 12px}
+.crumbs a{color:var(--acc2);text-decoration:none;font-weight:600}
+.crumbs span.sep{opacity:.6}
+.titlebar{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
+.titlebar h2{font-size:21px;margin:0;line-height:1.2;letter-spacing:-.01em}
+.titlebar .sub{font-size:13px;color:var(--muted);margin-top:3px}
+.titlebar .sp{flex:1}
+.grid{display:grid;gap:12px}
+@media (min-width:980px){.grid.two{grid-template-columns:370px 1fr;align-items:start}}
+.col{display:grid;gap:12px;min-width:0;align-content:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.card h3{font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700;display:flex;align-items:center;gap:8px}
+.card h3 .sp{flex:1}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:8px 12px;border-radius:9px;cursor:pointer;touch-action:manipulation}
+button:hover:not(:disabled){border-color:var(--acc2)}
+button:disabled{opacity:.45;cursor:default}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}
+button.pri.rec,button.pri.rec:disabled{background:var(--err);border-color:var(--err);opacity:1;animation:pulse 1s infinite}
+@keyframes pulse{50%{filter:brightness(1.25)}}
+button.big{width:100%;padding:14px;font-size:17px;border-radius:12px}
+button.sm{padding:4px 10px;font-size:13px;border-radius:7px}
+button.danger{color:var(--err)}
+select,input,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 8px;max-width:100%;min-width:0;width:100%}
+textarea{min-height:60px;resize:vertical}
+.field{display:grid;gap:4px;font-size:13px;color:var(--muted)}
+.field>span{font-weight:600}
+.field small{font-weight:400}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.row>.field{flex:1 1 120px}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;border:none;border-radius:0;padding:9px 0;font-weight:700;background:var(--bg);color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--card);color:var(--fg);box-shadow:inset 0 -3px 0 var(--c,var(--acc))}
+.list{display:grid;gap:8px}
+.item{display:flex;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);cursor:pointer;text-decoration:none;color:inherit}
+.item:hover{border-color:var(--acc2)}
+.item .m{flex:1;min-width:0}
+.item .t{font-weight:700}
+.item .d{font-size:13px;color:var(--muted);margin-top:2px}
+.item .r{text-align:right;font-size:13px;color:var(--muted);white-space:nowrap}
+.item .chev{color:var(--muted);font-size:20px}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;border:1px dashed var(--line);border-radius:12px}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (min-width:700px){.kpis{grid-template-columns:repeat(4,1fr)}}
+.kpi{background:var(--bg);border-radius:10px;padding:10px 12px;min-width:0}
+.kpi .l{font-size:12px;color:var(--muted);font-weight:600}
+.kpi .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.15}
+.kpi .v small{font-size:13px;font-weight:600;color:var(--muted);margin-left:3px}
+.kpi .s{font-size:12px;color:var(--muted)}
+.zone{display:inline-block;padding:1px 7px;border-radius:6px;color:#fff;font-weight:700;font-size:12px}
+.dirs{display:flex;gap:8px;flex-wrap:wrap;font-size:13px;font-variant-numeric:tabular-nums}
+.dirs b{font-weight:700}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:1px}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--grid);color:var(--muted);font-weight:600}
+.tag.lock{background:color-mix(in srgb,var(--acc2) 15%,transparent);color:var(--acc2)}
+canvas{width:100%;height:270px;display:block;touch-action:pan-y;cursor:crosshair;border-radius:8px}
+canvas.short{height:220px}
+@media (max-width:600px){canvas{height:225px}canvas.short{height:190px}}
+.hint{font-size:12px;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600;font-size:12px}
+tr.clk{cursor:pointer}tr.clk:hover td{background:var(--bg)}
+.tw{overflow-x:auto}
+.prog{height:6px;background:var(--grid);border-radius:4px;overflow:hidden;margin-top:10px;display:none}
+.prog i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+.pmsg{font-size:13px;color:var(--muted);margin-top:6px;min-height:18px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13.5px}
+.kv span:nth-child(odd){color:var(--muted)}
+.orient{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.omap{font-size:13px;color:var(--muted);margin-top:6px}
+.omap b{color:var(--fg)}
+#log{font:12px/1.45 ui-monospace,Consolas,monospace;max-height:260px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-all}
+#log .err{color:var(--err)}#log .warn{color:var(--warn)}#log .ok{color:var(--ok)}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px}
+.chk input{width:18px;height:18px;flex:none}
+.warnbox{background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);border-radius:10px;padding:10px 12px;font-size:13.5px;margin-bottom:12px}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--fg);padding:0;width:min(520px,94vw);max-height:90vh}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog form{display:grid;gap:12px;padding:16px}
+dialog h4{margin:0;font-size:17px}
+dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+.bottomnav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:flex;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
+.bottomnav a{flex:1;text-align:center;padding:10px 0 12px;color:var(--muted);text-decoration:none;font-weight:600;font-size:13px}
+.bottomnav a.act{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1 onclick="location.hash='#/'">Vibra <b>8531</b></h1>
+  <span class="chip" id="chip">Desconectado</span>
+  <span class="sp"></span>
+  <button class="sm" id="bConn">Conectar</button>
+</header>
+<main id="view"></main>
+<nav class="bottomnav">
+  <a href="#/" id="navA">Barcos</a>
+  <a href="#/ajustes" id="navS">Ajustes</a>
+</nav>
+<dialog id="dlg"></dialog>
+
+<script>
+'use strict';
+/* =====================================================================
+   Utilidades
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const G = 9.80665, N_TIME = 4096;
+const MODES = [512,1024,2048,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248];
+const DIRS = ['H','V','A'], DNAME = { H: 'Horizontal', V: 'Vertical', A: 'Axial' }, DCOL = { H: '--dH', V: '--dV', A: '--dA' };
+const SAX = ['X','Y','Z'];
+const ISO = [[0.71,1.8,4.5],[1.12,2.8,7.1],[1.8,4.5,11.2],[2.8,7.1,18]];
+const ISO_NAME = ['I · pequeña (<15 kW)','II · media (15–75 kW)','III · grande, base rígida','IV · grande, base flexible'];
+const ZCOL = ['--zA','--zB','--zC','--zD'];
+const WIN_NAME = ['Rectangular','Hann','Flat-top'];
+const MACH_TYPES = ['Motor eléctrico','Bomba','Ventilador','Compresor','Reductora','Motor diésel','Generador','Separadora','Otro'];
+const hex = dv => Array.from(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength), b => b.toString(16).padStart(2,'0')).join(' ');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2));
+const nowIso = () => new Date().toISOString();
+const fdate = iso => new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+const fday = iso => new Date(iso).toLocaleDateString([], { dateStyle: 'medium' });
+function fmt(v, d=3) {
+  if (v == null || !isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a !== 0 && (a >= 1e5 || a < 1e-3)) return v.toExponential(1);
+  return String(parseFloat(v.toPrecision(d)));
+}
+function modeLabel(m) {
+  const fs = MODES[m], t = 4096 / fs, n = ['Muy baja','Baja','Media','Amplia'][m];
+  return `${n ? n + ' · ' : ''}0–${fmt(fs/2.56, 4)} Hz · Δf ${fmt(fs/4096, 3)} Hz · ${t >= 1 ? t + ' s' : (t*1000).toFixed(0) + ' ms'}`;
+}
+function log(msg, cls='') {
+  const el = document.createElement('div'); if (cls) el.className = cls;
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logBuf.unshift(el);
+  if (logBuf.length > 400) logBuf.pop();
+  const L = $('#log'); if (L) L.prepend(el.cloneNode(true));
+}
+const logBuf = [];
+const pref = {
+  get(k, d) { try { const v = localStorage.getItem('vibra8531.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('vibra8531.' + k, JSON.stringify(v)); } catch (e) {} }
+};
+const zoneOf = (v, cls) => { const l = ISO[cls ?? 1]; return v < l[0] ? 0 : v < l[1] ? 1 : v < l[2] ? 2 : 3; };
+const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z = zoneOf(v, cls); return `<span class="zone" style="background:var(${ZCOL[z]})">${'ABCD'[z]}</span>`; };
+
+/* =====================================================================
+   Base de datos local (IndexedDB) — diseño preparado para sincronizar
+   ===================================================================== */
+const APP_VERSION = '2.1';
+const DB = {
+  db: null,
+  open() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('vibra8531', 1);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        for (const [n, idx] of [['plants', null], ['machines', 'plantId'], ['points', 'machineId'], ['measurements', 'pointId']]) {
+          const s = d.createObjectStore(n, { keyPath: 'id' }); if (idx) s.createIndex(idx, idx);
+        }
+      };
+      r.onsuccess = () => { this.db = r.result; res(); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  _r(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+  _s(store, mode='readonly') { return this.db.transaction(store, mode).objectStore(store); },
+  all(store) { return this._r(this._s(store).getAll()); },
+  by(store, idx, v) { return this._r(this._s(store).index(idx).getAll(v)); },
+  get(store, id) { return this._r(this._s(store).get(id)); },
+  put(store, o, touch=true) { if (touch) o.updated = nowIso(); return this._r(this._s(store, 'readwrite').put(o)); },
+  del(store, id) { return this._r(this._s(store, 'readwrite').delete(id)); },
+  clear(store) { return this._r(this._s(store, 'readwrite').clear()); }
+};
+async function delMachineDeep(id) {
+  for (const p of await DB.by('points', 'machineId', id)) await delPointDeep(p.id);
+  await DB.del('machines', id);
+}
+async function delPointDeep(id) {
+  for (const m of await DB.by('measurements', 'pointId', id)) await DB.del('measurements', m.id);
+  await DB.del('points', id);
+}
+async function delPlantDeep(id) {
+  for (const m of await DB.by('machines', 'plantId', id)) await delMachineDeep(m.id);
+  await DB.del('plants', id);
+}
+const byWhen = (a, b) => (a.when < b.when ? 1 : -1);
+
+/* =====================================================================
+   Capa del sensor (TE 8531N, firmware 4.x)
+   ===================================================================== */
+const U128 = h => 'b614' + h.toLowerCase() + '-b14a-40a6-b63f-0166f7868e13';
+const STD = { '180F':0x180F, '181A':0x181A, '180A':0x180A, '2A19':0x2A19, '2A6E':0x2A6E, '2A24':0x2A24, '2A26':0x2A26, '2A27':0x2A27 };
+const uuidOf = h => STD[h] ?? U128(h);
+const CUSTOM_SVCS = ['B200','B300','B400','CD00','CE00','CF00','DA00','DD00','EE00','FA00','FC00'];
+
+const Sensor = {
+  device: null, server: null, chr: {}, Q: Promise.resolve(), expectingDisc: false, manual: false, info: {},
+  onChange: () => {},
+  q(fn) { const p = this.Q.then(fn); this.Q = p.catch(() => {}); return p; },
+  connected() { return !!(this.device && this.device.gatt.connected); },
+  async connect() {
+    const optionalServices = [...CUSTOM_SVCS.map(U128), 0x180F, 0x181A, 0x180A];
+    this.device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: '85' }], optionalServices });
+    this.device.addEventListener('gattserverdisconnected', () => this._onDisc());
+    this.manual = false;
+    await this.open();
+  },
+  async open() { this.chr = {}; this.server = await this.device.gatt.connect(); this.onChange(); },
+  reconnect(tries=8) {
+    // una sola reconexión a la vez, aunque la pidan varios sitios
+    if (this._rc) return this._rc;
+    this._rc = (async () => {
+      try {
+        for (let i = 0; i < tries; i++) {
+          if (this.connected()) return;
+          try { await this.open(); return; } catch (e) { await sleep(1500); }
+        }
+        throw new Error('No se pudo reconectar con el sensor');
+      } finally { this._rc = null; }
+    })();
+    return this._rc;
+  },
+  /* Ejecuta una operación GATT; si la conexión se cae, reconecta y la reintenta */
+  async op(fn, tries=3) {
+    for (let i = 0; ; i++) {
+      try {
+        if (!this.connected()) await this.reconnect();
+        return await fn();
+      } catch (e) {
+        const lost = !this.connected() || /disconnected|not connected|GATT operation failed|NetworkError/i.test(e.message);
+        if (!lost || i >= tries - 1) throw e;
+        this.chr = {};
+        log('Conexión perdida durante una operación; reconectando…', 'warn');
+        await sleep(800);
+      }
+    }
+  },
+  disconnect() { this.manual = true; if (this.connected()) this.device.gatt.disconnect(); this.onChange(); },
+  _onDisc() {
+    this.chr = {}; this.onChange();
+    if (this.expectingDisc || this.manual) return;
+    log('Conexión perdida; reintentando…', 'warn');
+    this.reconnect(4).then(() => { log('Reconectado', 'ok'); this.onChange(); }).catch(e => log(e.message, 'err'));
+  },
+  async getChr(s, c) {
+    const k = s + '/' + c;
+    if (this.chr[k]) return this.chr[k];
+    const sv = await this.server.getPrimaryService(uuidOf(s));
+    return (this.chr[k] = await sv.getCharacteristic(uuidOf(c)));
+  },
+  _w(ch, b) { b = b instanceof Uint8Array ? b : new Uint8Array(b); return ch.writeValueWithResponse ? ch.writeValueWithResponse(b) : ch.writeValue(b); },
+  read(s, c) { return this.q(() => this.op(async () => (await this.getChr(s, c)).readValue())); },
+  write(s, c, b) { return this.q(() => this.op(async () => this._w(await this.getChr(s, c), b))); },
+  async readInfo() {
+    const td = new TextDecoder(), r = { name: this.device?.name || '' };
+    for (const [k, c] of [['model','2A24'],['fw','2A26'],['hw','2A27']]) { try { r[k] = td.decode(await this.read('180A', c)); } catch (e) {} }
+    return (this.info = r);
+  },
+  async status() {
+    const r = {};
+    try { r.battery = (await this.read('180F','2A19')).getUint8(0); } catch (e) {}
+    try { const dv = await this.read('181A','2A6E'); let t = dv.getInt16(0,false)*0.01; if (t < -60 || t > 150) t = dv.getInt16(0,true)*0.01; r.temp = t; } catch (e) {}
+    try { r.counter = (await this.read('B300','B301')).getUint16(0,false); } catch (e) {}
+    return r;
+  },
+  /* FA10: escribir 00 → leer → reescribir completo. Confirma eje (FA01) y modo (byte 2). */
+  async commit(axisCode, mode) {
+    if (axisCode != null) await this.write('FA00','FA01',[axisCode]);
+    await this.write('FA00','FA10',[0x00]);
+    await sleep(350);
+    const dv = await this.read('FA00','FA10');
+    const b = Uint8Array.from(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+    if (b.length < 3) throw new Error('Configuración FA10 inesperada: ' + hex(dv));
+    if (mode != null) b[2] = mode;
+    await this.write('FA00','FA10', b);
+    await sleep(250);
+    return (await this.read('FA00','FA10')).getUint8(2);
+  },
+  /* Mide un eje del sensor y devuelve Int16Array en cg */
+  async measureAxis(code, mode, { quiet=true, block=120, onStage=()=>{}, onProg=()=>{}, onRec=()=>{} } = {}) {
+    const acq = N_TIME / MODES[mode];
+    onStage('Configurando');
+    const m = await this.commit(code, mode);
+    if (m !== mode) log(`El sensor quedó en modo ${m} (pedido ${mode})`, 'warn');
+    await sleep(400);
+    if (quiet) {
+      this.expectingDisc = true;
+      try {
+        try { await this.write('B300','B303',[0x81]); } catch (e) {}
+        onRec(true, acq); onStage('Grabando sin Bluetooth');
+        await sleep(acq * 1000 + 300);
+        onRec(false); onStage('Procesando');
+        // esperar a que el sensor corte de verdad (puede tardar) antes de reconectar
+        for (let t = 0; t < 50 && this.connected(); t++) await sleep(100);
+        if (this.connected()) log('El sensor no cortó el Bluetooth; la medida puede llevar ruido de la radio', 'warn');
+        await sleep(1200);
+        onStage('Reconectando');
+        await this.reconnect();
+      } finally { this.expectingDisc = false; }
+      await sleep(400);
+    } else {
+      await this.write('B300','B303',[0x01]);
+      onRec(true, acq); onStage('Grabando');
+      await sleep(acq * 1000 + 300);
+      onRec(false);
+      await sleep(Math.max(0, 2 - acq) * 1000 + 1200);
+    }
+    onStage('Descargando');
+    return this.download(code, block, onProg);
+  },
+  async download(code, block=120, onProg=()=>{}) {
+    const out = new Int16Array(N_TIME);
+    let idx = 0, tries = 0;
+    while (idx < N_TIME) {
+      const len = Math.min(block, N_TIME - idx);
+      const dv = await this.q(() => this.op(async () => {
+        const ch = await this.getChr('DA00','DA03');
+        await this._w(ch, [code, idx >> 8, idx & 255, len]);
+        await sleep(30);
+        return ch.readValue();
+      }));
+      const n = Math.min(len, (dv.byteLength - 4) >> 1);
+      const rIdx = dv.byteLength >= 3 ? dv.getUint16(1,false) : -1;
+      if (n <= 0 || rIdx !== idx) {
+        if (++tries < 40) { await sleep(n <= 0 ? 300 : 100); continue; }
+        throw new Error(`El sensor no entrega datos (canal ${code}, respuesta ${hex(dv)})`);
+      }
+      tries = 0;
+      for (let k = 0; k < n; k++) out[idx + k] = dv.getInt16(4 + 2*k, false);
+      idx += n; onProg(idx / N_TIME);
+    }
+    return out;
+  }
+};
+
+/* =====================================================================
+   DSP
+   ===================================================================== */
+function makeWin(N, t) {
+  const w = new Float64Array(N);
+  for (let n = 0; n < N; n++) {
+    const p = 2*Math.PI*n/N;
+    w[n] = t === 0 ? 1 : t === 1 ? 0.5 - 0.5*Math.cos(p)
+      : 0.21557895 - 0.41663158*Math.cos(p) + 0.277263158*Math.cos(2*p) - 0.083578947*Math.cos(3*p) + 0.006947368*Math.cos(4*p);
+  }
+  return w;
+}
+function enbw(t, N=N_TIME) { const w = makeWin(N, t); let s1=0, s2=0; for (const v of w) { s1 += v; s2 += v*v; } return N*s2/(s1*s1); }
+function fft(re) {
+  const N = re.length, r = Float64Array.from(re), im = new Float64Array(N);
+  for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { const t = r[i]; r[i] = r[j]; r[j] = t; } }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2*Math.PI/len, wr0 = Math.cos(ang), wi0 = Math.sin(ang), h = len >> 1;
+    for (let i = 0; i < N; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < h; k++) {
+        const a = i + k, b = a + h, tr = r[b]*cr - im[b]*ci, ti = r[b]*ci + im[b]*cr;
+        r[b] = r[a] - tr; im[b] = im[a] - ti; r[a] += tr; im[a] += ti;
+        const nc = cr*wr0 - ci*wi0; ci = cr*wi0 + ci*wr0; cr = nc;
+      }
+    }
+  }
+  return { r, im };
+}
+/* Espectro de amplitud de pico (g), promedio en potencia de varios bloques en cg, hasta Fs/2,56 */
+function spectrum(blocks, fs, wt) {
+  const N = blocks[0].length, w = makeWin(N, wt); let s1 = 0; for (const v of w) s1 += v;
+  const nb = Math.floor((fs/2.56) / (fs/N)) + 1, acc = new Float64Array(nb);
+  for (const blk of blocks) {
+    let m = 0; for (const v of blk) m += v; m /= N;
+    const b = new Float64Array(N); for (let i = 0; i < N; i++) b[i] = (blk[i] - m) / 100 * w[i];
+    const { r, im } = fft(b);
+    for (let k = 0; k < nb; k++) { const a = Math.hypot(r[k], im[k]) * (k ? 2 : 1) / s1; acc[k] += a*a; }
+  }
+  const gpk = Float64Array.from(acc, v => Math.sqrt(v / blocks.length));
+  return { f: Float64Array.from(gpk, (_, k) => k*fs/N), gpk, enbw: enbw(wt, N), df: fs/N };
+}
+function conv(gpk, f, unit) {
+  const arms = gpk / Math.SQRT2;
+  if (unit === 'gpk') return gpk;
+  if (unit === 'grms') return arms;
+  return f >= 2 ? arms*G*1000/(2*Math.PI*f) : 0;
+}
+const UNIT = { vrms: 'mm/s RMS', grms: 'g RMS', gpk: 'g pico' };
+function lb(a, v) { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo+hi) >> 1; if (a[m] < v) lo = m + 1; else hi = m; } return lo; }
+function bandRms(sp, f0, f1, vel) {
+  const i0 = Math.max(1, lb(sp.f, f0)), i1 = Math.min(sp.f.length, lb(sp.f, f1 + 1e-9));
+  let s = 0;
+  for (let i = i0; i < i1; i++) { const a = sp.gpk[i]/Math.SQRT2, f = sp.f[i], v = vel ? (f >= 2 ? a*G*1000/(2*Math.PI*f) : 0) : a; s += v*v; }
+  return Math.sqrt(s / sp.enbw);
+}
+function timeStats(cg) {
+  const N = cg.length; let m = 0; for (const v of cg) m += v; m /= N;
+  let s2 = 0, pk = 0; for (const v of cg) { const d = v - m; s2 += d*d; if (Math.abs(d) > pk) pk = Math.abs(d); }
+  const rms = Math.sqrt(s2/N)/100; pk /= 100;
+  return { rms, pk, cf: rms > 0 ? pk/rms : NaN };
+}
+function findPeaks(f, y, f0, f1, n=6) {
+  const i0 = Math.max(1, lb(f, f0)), i1 = Math.min(y.length - 1, lb(f, f1));
+  const c = []; for (let i = i0; i < i1; i++) if (y[i] > y[i-1] && y[i] >= y[i+1]) c.push(i);
+  c.sort((a, b) => y[b] - y[a]);
+  const out = []; for (const i of c) { if (out.every(j => Math.abs(j - i) > 2)) out.push(i); if (out.length >= n) break; }
+  return out;
+}
+function orderAmp(f, y, fo, df) {
+  const tol = Math.max(2*df, 0.01*fo), i0 = lb(f, fo - tol), i1 = Math.min(y.length, lb(f, fo + tol) + 1);
+  let bi = -1; for (let i = i0; i < i1; i++) if (bi < 0 || y[i] > y[bi]) bi = i;
+  return bi < 0 ? null : { f: f[bi], y: y[bi] };
+}
+/* Valores globales de una medida, por dirección */
+function overallOf(meas) {
+  const out = {}, fmax = Math.min(1000, meas.cfg.fs/2.56);
+  for (const d of DIRS) {
+    const bl = meas.dirs[d]; if (!bl || !bl.length) continue;
+    const sp = spectrum(bl, meas.cfg.fs, meas.cfg.win), ts = timeStats(bl[bl.length-1]);
+    out[d] = { v: bandRms(sp, 10, fmax, true), arms: ts.rms, apk: ts.pk, cf: ts.cf };
+  }
+  return out;
+}
+const maxV = ov => { const v = DIRS.map(d => ov?.[d]?.v).filter(x => x != null); return v.length ? Math.max(...v) : null; };
+
+/* =====================================================================
+   Gráfico en canvas
+   ===================================================================== */
+class Plot {
+  constructor(cv, o) {
+    Object.assign(this, { cv, series: [], markers: [], hlines: [], xr: null, logY: false, zeroBase: false, hover: null, drag: null, m: null, xtime: false, ...o });
+    cv.addEventListener('pointerdown', e => { this.drag = { a: e.offsetX, b: e.offsetX }; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
+    cv.addEventListener('pointermove', e => { this.hover = e.offsetX; if (this.drag) this.drag.b = e.offsetX; this.draw(); });
+    cv.addEventListener('pointerup', () => {
+      const d = this.drag; this.drag = null;
+      if (d && Math.abs(d.b - d.a) > 8 && this.m) { this.xr = [this.inv(Math.min(d.a, d.b)), this.inv(Math.max(d.a, d.b))]; this.onzoom && this.onzoom(); }
+      else if (d && this.onclick && this.m) this.onclick(this.inv(d.a));
+      this.draw();
+    });
+    cv.addEventListener('pointercancel', () => { this.drag = null; this.draw(); });
+    cv.addEventListener('pointerleave', () => { if (!this.drag) { this.hover = null; this.draw(); } });
+    cv.addEventListener('dblclick', () => this.reset());
+    new ResizeObserver(() => this.draw()).observe(cv);
+  }
+  reset() { this.xr = null; this.onzoom && this.onzoom(); this.draw(); }
+  inv(px) { const m = this.m; return m.x0 + (px - m.L)/m.pw*(m.x1 - m.x0); }
+  vis() { return this.series.filter(s => s.x && s.x.length); }
+  range() {
+    const v = this.vis(); if (!v.length) return null;
+    if (this.xr) return this.xr;
+    let a = Infinity, b = -Infinity; for (const s of v) { a = Math.min(a, s.x[0]); b = Math.max(b, s.x[s.x.length-1]); }
+    if (this.xtime) { const pad = Math.max(864e5, (b - a)*0.05); a -= pad; b += pad; }
+    return [a, b];
+  }
+  xticks(x0, x1, pw) {
+    if (!this.xtime) { const st = niceStep(x1 - x0, Math.max(3, pw/80)); const out = []; for (let v = Math.ceil(x0/st)*st; v <= x1; v += st) out.push([v, fmt(Math.abs(v) < st*1e-9 ? 0 : v, 5)]); return out; }
+    const steps = [36e5, 6*36e5, 864e5, 7*864e5, 30*864e5, 91*864e5, 365*864e5], n = Math.max(2, pw/90);
+    const st = steps.find(s => (x1 - x0)/s <= n) || steps[steps.length-1];
+    const out = []; const d0 = new Date(x0); d0.setHours(0,0,0,0);
+    for (let v = d0.getTime(); v <= x1; v += st) if (v >= x0) out.push([v, new Date(v).toLocaleDateString([], st >= 30*864e5 ? { month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' })]);
+    return out;
+  }
+  draw() {
+    const cv = this.cv, dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    if (!W || !H || !cv.isConnected) return;
+    if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)) { cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+    const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+    const css = getComputedStyle(document.documentElement), C = n => css.getPropertyValue(n).trim();
+    g.fillStyle = C('--plot'); g.fillRect(0,0,W,H); g.font = '11px system-ui,sans-serif';
+    const L = 50, R = 10, T = 10, B = 30, pw = W - L - R, ph = H - T - B;
+    const vis = this.vis();
+    if (!vis.length) { g.fillStyle = C('--muted'); g.textAlign = 'center'; g.fillText(this.empty || 'Sin datos', W/2, H/2); this.m = null; return; }
+    let [x0, x1] = this.range(); if (x1 <= x0) x1 = x0 + 1;
+    let log = this.logY, ymin = Infinity, ymax = -Infinity;
+    const idx = s => [Math.max(0, lb(s.x, x0) - 1), Math.min(s.x.length, lb(s.x, x1) + 1)];
+    for (const s of vis) { const [i0, i1] = idx(s); for (let i = i0; i < i1; i++) { const y = s.y[i]; if (!isFinite(y) || (log && y <= 0)) continue; if (y < ymin) ymin = y; if (y > ymax) ymax = y; } }
+    for (const h of this.hlines) if (h.inRange) { ymax = Math.max(ymax, h.y); ymin = Math.min(ymin, h.y); }
+    if (!isFinite(ymin)) { ymin = 0; ymax = 1; log = false; }
+    let lo, hi;
+    if (log) { lo = Math.floor(Math.log10(Math.max(ymin, ymax*1e-5))); hi = Math.ceil(Math.log10(ymax)); if (hi <= lo) hi = lo + 1; }
+    else {
+      if (this.zeroBase) ymin = Math.min(0, ymin);
+      if (ymax === ymin) { ymax += 1; if (!this.zeroBase) ymin -= 1; }
+      const p = (ymax - ymin)*0.06; ymax += p; if (!this.zeroBase || ymin < 0) ymin -= p;
+    }
+    const X = x => L + (x - x0)/(x1 - x0)*pw;
+    const Y = y => log ? T + ph*(1 - (Math.log10(Math.max(y, Math.pow(10, lo))) - lo)/(hi - lo)) : T + ph*(1 - (y - ymin)/(ymax - ymin));
+    this.m = { L, pw, x0, x1 };
+    g.strokeStyle = C('--grid'); g.fillStyle = C('--muted'); g.lineWidth = 1; g.textAlign = 'right'; g.textBaseline = 'middle';
+    if (log) { const st = hi - lo > 6 ? 2 : 1; for (let e = lo; e <= hi; e += st) { const yy = Y(Math.pow(10, e)); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillText(fmt(Math.pow(10, e), 2), L-6, yy); } }
+    else { const st = niceStep(ymax - ymin, Math.max(3, ph/42)); for (let v = Math.ceil(ymin/st)*st; v <= ymax; v += st) { const yy = Y(v); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillText(fmt(Math.abs(v) < st*1e-9 ? 0 : v, 4), L-6, yy); } }
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    for (const [v, lab] of this.xticks(x0, x1, pw)) { const xx = X(v); g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.fillText(lab, xx, T+ph+5); }
+    if (this.xlab) g.fillText(this.xlab, L + pw/2, H - 12);
+    g.save(); g.translate(10, T + ph/2); g.rotate(-Math.PI/2); g.textBaseline = 'middle'; g.fillText(this.ylab || '', 0, 0); g.restore();
+    g.strokeStyle = C('--line'); g.strokeRect(L, T, pw, ph);
+    g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+    // líneas horizontales (umbrales)
+    g.setLineDash([5,4]); g.textAlign = 'right'; g.textBaseline = 'bottom';
+    for (const h of this.hlines) { const yy = Y(h.y); if (yy < T || yy > T+ph) continue; g.strokeStyle = C(h.color); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillStyle = C(h.color); g.fillText(h.label, L+pw-4, yy-2); }
+    // marcadores verticales
+    g.setLineDash([3,4]); g.textAlign = 'left'; g.textBaseline = 'top';
+    let lastLbl = -1e9;
+    for (const mk of this.markers) {
+      if (mk.x < x0 || mk.x > x1) continue; const xx = X(mk.x);
+      g.strokeStyle = C('--acc'); g.globalAlpha = .7; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.globalAlpha = 1;
+      if (xx - lastLbl > 26) { g.fillStyle = C('--acc'); g.fillText(mk.label, xx + 3, T + 2); lastLbl = xx; }
+    }
+    g.setLineDash([]);
+    for (const s of vis) {
+      const [i0, i1] = idx(s); g.strokeStyle = C(s.color); g.lineWidth = s.width || 1.3; g.setLineDash(s.dash || []); g.beginPath();
+      const yv = y => isFinite(y) ? y : (log ? 0 : ymin);
+      if (i1 - i0 > pw*2) {
+        let px = null, mn = 0, mx = 0, first = true;
+        const flush = () => { if (px == null) return; if (first) { g.moveTo(px, Y(mn)); first = false; } else g.lineTo(px, Y(mn)); g.lineTo(px, Y(mx)); };
+        for (let i = i0; i < i1; i++) { const p = Math.floor(X(s.x[i])), y = yv(s.y[i]); if (p !== px) { flush(); px = p; mn = mx = y; } else { if (y < mn) mn = y; if (y > mx) mx = y; } }
+        flush();
+      } else for (let i = i0; i < i1; i++) { const y = yv(s.y[i]); i === i0 ? g.moveTo(X(s.x[i]), Y(y)) : g.lineTo(X(s.x[i]), Y(y)); }
+      g.stroke(); g.setLineDash([]);
+      if (s.dots) { g.fillStyle = C(s.color); for (let i = i0; i < i1; i++) { g.beginPath(); g.arc(X(s.x[i]), Y(yv(s.y[i])), 3.5, 0, 7); g.fill(); } }
+    }
+    if (this.drag && Math.abs(this.drag.b - this.drag.a) > 2) { g.fillStyle = 'rgba(31,111,209,.15)'; g.fillRect(Math.min(this.drag.a, this.drag.b), T, Math.abs(this.drag.b - this.drag.a), ph); }
+    g.restore();
+    if (this.hover != null && !this.drag && this.hover >= L && this.hover <= L + pw) {
+      const xv = this.inv(this.hover);
+      g.strokeStyle = C('--muted'); g.beginPath(); g.moveTo(this.hover, T); g.lineTo(this.hover, T+ph); g.stroke();
+      const lines = [];
+      let xNear = xv;
+      for (const s of vis) {
+        let i = lb(s.x, xv); if (i >= s.x.length) i = s.x.length - 1; if (i > 0 && Math.abs(s.x[i-1] - xv) < Math.abs(s.x[i] - xv)) i--;
+        xNear = s.x[i];
+        g.fillStyle = C(s.color); g.beginPath(); g.arc(X(s.x[i]), Y(isFinite(s.y[i]) ? s.y[i] : ymin), 3, 0, 7); g.fill();
+        lines.push([(s.name ? s.name + ': ' : '') + fmt(s.y[i], 4) + ' ' + (this.yunit || '') + (this.tipExtra ? this.tipExtra(s.x[i]) : ''), s.color]);
+      }
+      lines.unshift([this.xfmt(this.xtime ? xNear : xv), '--fg']);
+      g.font = '12px system-ui,sans-serif';
+      const bw = Math.max(...lines.map(l => g.measureText(l[0]).width)) + 16, bh = lines.length*16 + 8;
+      let bx = this.hover + 10; if (bx + bw > L + pw) bx = this.hover - bw - 10;
+      g.fillStyle = C('--card'); g.strokeStyle = C('--line'); g.fillRect(bx, T+6, bw, bh); g.strokeRect(bx, T+6, bw, bh);
+      g.textAlign = 'left'; g.textBaseline = 'top';
+      lines.forEach((l, k) => { g.fillStyle = C(l[1] === '--fg' ? '--fg' : l[1]); g.fillText(l[0], bx + 8, T + 10 + k*16); });
+    }
+  }
+}
+function niceStep(range, n) { const raw = range/n, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw/p; return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10)*p; }
+
+/* =====================================================================
+   Diálogo de formulario genérico
+   ===================================================================== */
+function formDialog(title, fields, vals={}, { okText='Guardar', danger=null } = {}) {
+  return new Promise(resolve => {
+    const d = $('#dlg');
+    d.innerHTML = `<form method="dialog"><h4>${esc(title)}</h4>` + fields.map(f => {
+      const v = vals[f.k] ?? f.def ?? '', dis = f.disabled ? 'disabled' : '', req = f.req ? 'required' : '';
+      let inp;
+      if (f.type === 'select') inp = `<select name="${f.k}" ${dis}>${f.options.map(([ov, ol]) => `<option value="${esc(ov)}" ${String(ov) === String(v) ? 'selected' : ''}>${esc(ol)}</option>`).join('')}</select>`;
+      else if (f.type === 'textarea') inp = `<textarea name="${f.k}" ${dis}>${esc(v)}</textarea>`;
+      else inp = `<input name="${f.k}" type="${f.type || 'text'}" value="${esc(v)}" ${f.type === 'number' ? `step="any" inputmode="decimal"` : ''} ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} ${req} ${dis} ${f.ph ? `placeholder="${esc(f.ph)}"` : ''}>`;
+      return `<label class="field"><span>${esc(f.label)}${f.req ? ' *' : ''}</span>${inp}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`;
+    }).join('') + `<div class="acts">${danger ? `<button type="button" class="danger" id="dlgDel" style="margin-right:auto">${esc(danger)}</button>` : ''}<button type="button" id="dlgCancel">Cancelar</button><button class="pri" value="ok">${esc(okText)}</button></div></form>`;
+    const form = d.querySelector('form');
+    let done = false;
+    const finish = v => { if (done) return; done = true; d.close(); resolve(v); };
+    form.onsubmit = e => {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const out = {};
+      for (const f of fields) { if (f.disabled) continue; const el = form.elements[f.k]; out[f.k] = f.type === 'number' ? (el.value === '' ? null : +el.value) : el.value.trim(); }
+      finish(out);
+    };
+    d.querySelector('#dlgCancel').onclick = () => finish(null);
+    if (danger) d.querySelector('#dlgDel').onclick = () => finish('__delete');
+    d.onclose = () => finish(null);
+    d.showModal();
+  });
+}
+const confirmDel = what => confirm(`¿Borrar ${what}? No se puede deshacer.`);
+
+/* =====================================================================
+   Estado global, conexión y cabecera
+   ===================================================================== */
+let busy = false;
+const specCache = new Map();
+function setChip() {
+  const c = Sensor.connected(), ch = $('#chip');
+  ch.className = 'chip' + (busy ? ' busy' : c ? ' on' : '');
+  ch.textContent = busy ? 'Midiendo…' : c ? (Sensor.device.name || 'Conectado') : 'Sensor desconectado';
+  $('#bConn').textContent = c ? 'Desconectar' : 'Conectar';
+  $('#bConn').disabled = busy;
+  const bm = $('#bMeas');
+  if (bm && !bm.classList.contains('rec')) { bm.disabled = busy || !c; bm.textContent = busy ? 'Midiendo…' : c ? 'Medir' : 'Conecta el sensor para medir'; }
+}
+Sensor.onChange = setChip;
+async function connect() {
+  if (Sensor.connected()) { Sensor.disconnect(); return; }
+  if (!navigator.bluetooth) return alert('Este navegador no tiene Web Bluetooth. Usa Chrome o Edge.');
+  try {
+    await Sensor.connect();
+    const inf = await Sensor.readInfo();
+    log(`Conectado a ${inf.name} (${inf.fw || 'firmware ?'})`, 'ok');
+    if (inf.fw && !/_4\./.test(inf.fw)) log('Firmware ' + inf.fw + ': la app está hecha para el 4.x', 'warn');
+    Sensor.lastStatus = await Sensor.status();
+  } catch (e) { if (e.name !== 'NotFoundError') { log('Conexión: ' + e.message, 'err'); alert('No se pudo conectar: ' + e.message); } }
+  setChip(); if (location.hash.startsWith('#/ajustes')) route();
+}
+$('#bConn').onclick = connect;
+
+/* =====================================================================
+   Rutas
+   ===================================================================== */
+const view = $('#view');
+function crumbs(parts) {
+  return `<nav class="crumbs">${parts.map(([href, t], i) => (i ? '<span class="sep">›</span>' : '') + (href ? `<a href="${href}">${esc(t)}</a>` : `<span>${esc(t)}</span>`)).join('')}</nav>`;
+}
+async function route() {
+  const h = location.hash || '#/', [, kind, id] = h.split('/');
+  $('#navA').classList.toggle('act', kind !== 'ajustes');
+  $('#navS').classList.toggle('act', kind === 'ajustes');
+  try {
+    if (!kind) await vPlants();
+    else if (kind === 'b') await vPlant(id);
+    else if (kind === 'q') await vMachine(id);
+    else if (kind === 'p') await vPoint(id);
+    else if (kind === 'm') await vMeas(id);
+    else if (kind === 'ajustes') await vSettings();
+    else await vPlants();
+  } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
+  setChip();
+}
+window.addEventListener('hashchange', () => { if (!busy) route(); window.scrollTo(0, 0); });
+
+/* ---------------- Barcos ---------------- */
+async function vPlants() {
+  const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
+  const machines = await DB.all('machines');
+  view.innerHTML = `
+    <div class="titlebar"><div><h2>Barcos</h2><div class="sub">Plantas → máquinas → puntos de medida</div></div><span class="sp"></span><button class="pri" id="bNew">+ Barco</button></div>
+    <div class="list">${plants.length ? plants.map(p => {
+      const n = machines.filter(m => m.plantId === p.id).length;
+      return `<a class="item" href="#/b/${p.id}"><div class="m"><div class="t">${esc(p.name)}</div><div class="d">${esc(p.code || '')}${p.code ? ' · ' : ''}${n} máquina${n === 1 ? '' : 's'}</div></div><span class="chev">›</span></a>`;
+    }).join('') : `<div class="empty">Aún no hay barcos.<br><br><button class="pri" id="bNew2">Crear el primer barco</button><br><br><span class="hint">o carga unos datos de ejemplo en Ajustes</span></div>`}</div>`;
+  const nb = async () => {
+    const v = await formDialog('Nuevo barco', [
+      { k: 'name', label: 'Nombre', req: true, ph: 'p. ej. Patrullero Río Miño' },
+      { k: 'code', label: 'IMO / identificador' },
+      { k: 'notes', label: 'Notas', type: 'textarea' }]);
+    if (!v) return;
+    const p = { id: uid(), created: nowIso(), ...v }; await DB.put('plants', p); location.hash = '#/b/' + p.id;
+  };
+  $('#bNew').onclick = nb; if ($('#bNew2')) $('#bNew2').onclick = nb;
+}
+
+/* ---------------- Barco ---------------- */
+const machineFields = m => [
+  { k: 'name', label: 'Nombre', req: true, ph: 'p. ej. Bomba de lastre 1' },
+  { k: 'type', label: 'Tipo', type: 'select', options: MACH_TYPES.map(t => [t, t]), def: 'Motor eléctrico' },
+  { k: 'location', label: 'Ubicación', ph: 'p. ej. Cámara de máquinas, babor' },
+  { k: 'rpm', label: 'Velocidad nominal (rpm)', type: 'number', min: 0, req: true },
+  { k: 'kw', label: 'Potencia nominal (kW)', type: 'number', min: 0 },
+  { k: 'iso', label: 'Clase ISO 10816-1', type: 'select', options: ISO_NAME.map((n, i) => [i, n]), def: 1 },
+  { k: 'notes', label: 'Notas', type: 'textarea' }];
+async function vPlant(id) {
+  const p = await DB.get('plants', id); if (!p) { location.hash = '#/'; return; }
+  const machines = (await DB.by('machines', 'plantId', id)).sort((a, b) => a.name.localeCompare(b.name));
+  const points = await DB.all('points');
+  view.innerHTML = crumbs([['#/', 'Barcos'], [null, p.name]]) + `
+    <div class="titlebar"><div><h2>${esc(p.name)}</h2><div class="sub">${esc(p.code || '')} ${esc(p.notes || '')}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><h3 style="margin:0;font-size:15px">Máquinas</h3><span class="sp"></span><button class="pri" id="bNew">+ Máquina</button></div>
+    <div class="list">${machines.length ? machines.map(m => {
+      const n = points.filter(x => x.machineId === m.id).length;
+      return `<a class="item" href="#/q/${m.id}"><div class="m"><div class="t">${esc(m.name)}</div><div class="d">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''}${m.location ? ' · ' + esc(m.location) : ''}</div></div><div class="r">${n} punto${n === 1 ? '' : 's'}</div><span class="chev">›</span></a>`;
+    }).join('') : '<div class="empty">Este barco aún no tiene máquinas.</div>'}</div>`;
+  $('#bEdit').onclick = async () => {
+    const v = await formDialog('Editar barco', [{ k: 'name', label: 'Nombre', req: true }, { k: 'code', label: 'IMO / identificador' }, { k: 'notes', label: 'Notas', type: 'textarea' }], p, { danger: 'Borrar barco' });
+    if (v === '__delete') { if (confirmDel(`el barco «${p.name}» con todas sus máquinas, puntos y medidas`)) { await delPlantDeep(p.id); location.hash = '#/'; } return; }
+    if (v) { Object.assign(p, v); await DB.put('plants', p); route(); }
+  };
+  $('#bNew').onclick = async () => {
+    const v = await formDialog('Nueva máquina', machineFields());
+    if (!v) return;
+    const m = { id: uid(), plantId: id, created: nowIso(), ...v, iso: +v.iso }; await DB.put('machines', m); location.hash = '#/q/' + m.id;
+  };
+}
+
+/* ---------------- Máquina ---------------- */
+const orientDefault = { z: 'V', x: 'H' };
+function orientMap(o) {   // eje del sensor → dirección
+  const rest = DIRS.filter(d => d !== o.z && d !== o.x);
+  return { X: o.x, Y: rest[0], Z: o.z };
+}
+const orientText = o => { const m = orientMap(o); return SAX.map(a => `${a}→${m[a]}`).join(' · '); };
+const pointFields = (pt, locked) => [
+  { k: 'name', label: 'Nombre del punto', req: true, ph: 'p. ej. Motor lado acoplamiento' },
+  { k: 'code', label: 'Código', ph: 'p. ej. M1, B2' },
+  { k: 'mode', label: 'Rango de medida', type: 'select', options: MODES.map((_, m) => [m, modeLabel(m)]), def: 1, disabled: locked, hint: locked ? 'Bloqueado: el punto ya tiene medidas' : 'Fijo para todas las medidas del punto' },
+  { k: 'navg', label: 'Promedios', type: 'select', options: [[1,'1'],[2,'2'],[4,'4'],[8,'8']], def: 2, disabled: locked },
+  { k: 'win', label: 'Ventana FFT', type: 'select', options: [[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']], def: 1, disabled: locked },
+  { k: 'notes', label: 'Notas', type: 'textarea' }];
+async function vMachine(id) {
+  const m = await DB.get('machines', id); if (!m) { location.hash = '#/'; return; }
+  const p = await DB.get('plants', m.plantId);
+  const pts = (await DB.by('points', 'machineId', id)).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
+  const last = {};
+  for (const pt of pts) { const ms = await DB.by('measurements', 'pointId', pt.id); ms.sort(byWhen); last[pt.id] = { n: ms.length, m: ms[0] }; }
+  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
+    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri" id="bNew">+ Punto</button></div>
+    <div class="list">${pts.length ? pts.map(pt => {
+      const L = last[pt.id], ov = L.m?.overall;
+      return `<a class="item" href="#/p/${pt.id}"><div class="m"><div class="t">${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
+        <div class="d">${L.n ? `${L.n} medida${L.n === 1 ? '' : 's'} · última ${fdate(L.m.when)}` : 'Sin medidas'} · ${esc(modeLabel(pt.cfg.mode).split(' · ').slice(-3, -1).join(' · '))}</div>
+        ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${zoneTag(maxV(ov), m.iso)}</div>` : ''}</div><span class="chev">›</span></a>`;
+    }).join('') : '<div class="empty">Crea los puntos donde vas a medir (por ejemplo, cada alojamiento de rodamiento).</div>'}</div>`;
+  $('#bEdit').onclick = async () => {
+    const v = await formDialog('Editar máquina', machineFields(m), m, { danger: 'Borrar máquina' });
+    if (v === '__delete') { if (confirmDel(`la máquina «${m.name}» con sus puntos y medidas`)) { await delMachineDeep(m.id); location.hash = '#/b/' + p.id; } return; }
+    if (v) { Object.assign(m, v, { iso: +v.iso }); await DB.put('machines', m); route(); }
+  };
+  $('#bNew').onclick = async () => {
+    const v = await formDialog('Nuevo punto', pointFields(null, false), { mode: pref.get('lastMode', 1), navg: 2, win: 1 });
+    if (!v) return;
+    const pt = { id: uid(), machineId: id, created: nowIso(), name: v.name, code: v.code, notes: v.notes,
+                 cfg: { mode: +v.mode, navg: +v.navg, win: +v.win }, orient: { ...orientDefault } };
+    pref.set('lastMode', +v.mode);
+    await DB.put('points', pt); location.hash = '#/p/' + pt.id;
+  };
+}
+
+/* ---------------- Punto (medir + tendencia) ---------------- */
+let recTimer = null;
+function recIndicator(on, acq) {
+  const b = $('#bMeas'); if (!b) return;
+  clearInterval(recTimer);
+  if (!on) { b.classList.remove('rec'); b.textContent = 'Midiendo…'; return; }
+  const t0 = performance.now(); b.classList.add('rec');
+  const tick = () => { b.textContent = `● GRABANDO · ${Math.max(0, acq - (performance.now() - t0)/1000).toFixed(1)} s`; };
+  tick(); recTimer = setInterval(tick, 100);
+  if (navigator.vibrate) try { navigator.vibrate(80); } catch (e) {}
+}
+async function vPoint(id) {
+  const pt = await DB.get('points', id); if (!pt) { location.hash = '#/'; return; }
+  const m = await DB.get('machines', pt.machineId), p = await DB.get('plants', m.plantId);
+  const ms = (await DB.by('measurements', 'pointId', id)).sort(byWhen);
+  const locked = ms.length > 0, cfg = pt.cfg, o = pt.orient || orientDefault;
+  const lastRpm = ms[0]?.rpm ?? m.rpm, lastLoad = ms[0]?.load ?? '';
+  const nax = 3, per = 4096/MODES[cfg.mode] + (pref.get('quiet', true) ? 9 : 5);
+  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
+    <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
+      <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
+      <span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Nueva medida</h3>
+          <div class="row">
+            <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="mRpm" inputmode="decimal" min="1" step="any" value="${lastRpm ?? ''}"></label>
+            <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${lastLoad}" placeholder="0–100"></label>
+          </div>
+          <div class="field" style="margin-top:12px"><span>Posición del sensor</span>
+            <div class="orient">
+              <label class="field"><small>Z (perpendicular a la base) apunta en</small><select id="oZ">${DIRS.map(d => `<option value="${d}" ${o.z === d ? 'selected' : ''}>${DNAME[d]}</option>`).join('')}</select></label>
+              <label class="field"><small>X (flecha de la base) apunta en</small><select id="oX"></select></label>
+            </div>
+            <div class="omap" id="oMap"></div>
+          </div>
+          <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
+          <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
+          <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
+          <p class="note">Tiempo estimado ~${Math.round(per*nax*cfg.navg)} s: se miden los 3 ejes uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Tendencia · velocidad global<span class="sp"></span><span class="hint">10–${fmt(Math.min(1000, MODES[cfg.mode]/2.56), 4)} Hz</span></h3>
+          <canvas id="cvTr" class="short"></canvas>
+          <p class="note">Líneas de zona ISO 10816-1 clase ${['I','II','III','IV'][m.iso ?? 1]}. Pulsa sobre un punto para abrir la medida.</p>
+        </div>
+        <div class="card">
+          <h3>Medidas (${ms.length})</h3>
+          ${ms.length ? `<div class="tw"><table><tr><th>Fecha</th><th>rpm</th><th>Carga</th>${DIRS.map(d => `<th><span class="dot" style="background:var(${DCOL[d]})"></span>${d}</th>`).join('')}<th></th></tr>
+            ${ms.map(x => `<tr class="clk" data-id="${x.id}"><td>${fdate(x.when)}</td><td>${fmt(x.rpm, 5)}</td><td>${fmt(x.load, 3)} %</td>${DIRS.map(d => `<td>${fmt(x.overall?.[d]?.v)}</td>`).join('')}<td>${zoneTag(maxV(x.overall), m.iso)}</td></tr>`).join('')}</table></div>
+            <p class="note">Velocidad global en mm/s RMS.</p>` : '<div class="empty">Sin medidas todavía.</div>'}
+        </div>
+      </div>
+    </div>`;
+  // orientación
+  const fillX = () => {
+    const z = $('#oZ').value, cur = $('#oX').value || o.x;
+    const opts = DIRS.filter(d => d !== z);
+    $('#oX').innerHTML = opts.map(d => `<option value="${d}" ${d === cur ? 'selected' : ''}>${DNAME[d]}</option>`).join('');
+    const om = orientMap({ z, x: $('#oX').value });
+    $('#oMap').innerHTML = 'Resultado: ' + SAX.map(a => `${a} → <b>${DNAME[om[a]]}</b>`).join(' · ');
+  };
+  $('#oZ').onchange = fillX; $('#oX').onchange = fillX; fillX();
+  $$('tr.clk').forEach(tr => tr.onclick = () => location.hash = '#/m/' + tr.dataset.id);
+  // tendencia
+  const tr = new Plot($('#cvTr'), { xtime: true, ylab: 'mm/s RMS', yunit: 'mm/s', zeroBase: true, empty: 'La tendencia aparecerá con las medidas',
+    xfmt: x => fdate(new Date(x).toISOString()) });
+  const asc = ms.slice().reverse();
+  tr.series = DIRS.filter(d => asc.some(x => x.overall?.[d])).map(d => {
+    const rows = asc.filter(x => x.overall?.[d]);
+    return { name: d, x: Float64Array.from(rows, x => Date.parse(x.when)), y: Float64Array.from(rows, x => x.overall[d].v), color: DCOL[d], dots: true, width: 2 };
+  });
+  const lim = ISO[m.iso ?? 1];
+  tr.hlines = [{ y: lim[0], color: '--zB', label: 'A/B' }, { y: lim[1], color: '--zC', label: 'B/C', inRange: true }, { y: lim[2], color: '--zD', label: 'C/D' }];
+  tr.onclick = x => { if (!asc.length) return; let best = asc[0]; for (const r of asc) if (Math.abs(Date.parse(r.when) - x) < Math.abs(Date.parse(best.when) - x)) best = r; location.hash = '#/m/' + best.id; };
+  tr.draw();
+  // editar
+  $('#bEdit').onclick = async () => {
+    const v = await formDialog('Editar punto', pointFields(pt, locked), { ...pt, ...pt.cfg }, { danger: 'Borrar punto' });
+    if (v === '__delete') { if (confirmDel(`el punto «${pt.name}» y sus ${ms.length} medidas`)) { await delPointDeep(pt.id); location.hash = '#/q/' + m.id; } return; }
+    if (!v) return;
+    pt.name = v.name; pt.code = v.code; pt.notes = v.notes;
+    if (!locked) pt.cfg = { mode: +v.mode, navg: +v.navg, win: +v.win };
+    await DB.put('points', pt); route();
+  };
+  // medir
+  setChip();
+  $('#bMeas').onclick = () => measurePoint(pt, m);
+}
+
+async function measurePoint(pt, mach) {
+  if (busy || !Sensor.connected()) return;
+  const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
+  if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
+  if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
+  const orient = { z: $('#oZ').value, x: $('#oX').value }, om = orientMap(orient);
+  const cfg = pt.cfg, fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
+  const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
+  const meas = { id: uid(), pointId: pt.id, when: nowIso(), rpm, load, note: $('#mNote').value.trim(), orient, axisMap: om,
+                 cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
+  busy = true; setChip();
+  const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
+  const total = 3*cfg.navg; let step = 0;
+  try {
+    try { const s = await Sensor.status(); meas.sensor.temp = s.temp; meas.sensor.battery = s.battery; } catch (e) {}
+    for (let r = 0; r < cfg.navg; r++) for (const ax of SAX) {
+      const d = om[ax], tag = `${DNAME[d]} (${ax})${cfg.navg > 1 ? ` · ${r+1}/${cfg.navg}` : ''}`;
+      const cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
+        onStage: s => prog(step/total, `${tag}: ${s}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
+      (meas.dirs[d] ||= []).push(cg);
+      step++;
+    }
+    meas.overall = overallOf(meas);
+    await DB.put('measurements', meas, false);
+    pt.orient = orient; await DB.put('points', pt);
+    log(`Medida guardada en ${pt.name}: ${DIRS.map(d => d + ' ' + fmt(meas.overall[d]?.v)).join(' · ')} mm/s`, 'ok');
+    busy = false; recIndicator(false);
+    location.hash = '#/m/' + meas.id;
+  } catch (e) {
+    log('Medida: ' + e.message, 'err'); prog(null, 'Error: ' + e.message + ' — la medida no se ha guardado.');
+    busy = false; recIndicator(false); setChip();
+  }
+}
+
+/* ---------------- Medida ---------------- */
+let mvState = { dir: null, ref: '', unit: 'vrms', yscale: 'lin' };
+function getSpec(meas, d) {
+  const k = meas.id + '|' + d;
+  if (!specCache.has(k)) { specCache.set(k, spectrum(meas.dirs[d], meas.cfg.fs, meas.cfg.win)); if (specCache.size > 60) specCache.delete(specCache.keys().next().value); }
+  return specCache.get(k);
+}
+async function vMeas(id) {
+  const ms = await DB.get('measurements', id); if (!ms) { location.hash = '#/'; return; }
+  const pt = await DB.get('points', ms.pointId), m = await DB.get('machines', pt.machineId), p = await DB.get('plants', m.plantId);
+  const sibs = (await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
+  const dirsHere = DIRS.filter(d => ms.dirs[d]?.length);
+  if (!dirsHere.includes(mvState.dir)) mvState.dir = dirsHere[0];
+  if (mvState.ref && !sibs.some(s => s.id === mvState.ref && s.id !== ms.id)) mvState.ref = '';
+  const f1 = ms.rpm/60, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
+  const i = sibs.findIndex(s => s.id === ms.id), prev = sibs[i+1], next = sibs[i-1];
+  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]]) + `
+    <div class="titlebar"><div><h2>${fdate(ms.when)}</h2>
+      <div class="sub">${fmt(ms.rpm, 5)} rpm · carga ${fmt(ms.load, 3)} % · sensor ${esc(orientText(ms.orient))}${ms.note ? ' · ' + esc(ms.note) : ''}${ms.demo ? ' · <span class="tag">ejemplo</span>' : ''}</div></div>
+      <span class="sp"></span>
+      <button class="sm" id="bPrev" ${prev ? '' : 'disabled'} title="Anterior">‹</button><button class="sm" id="bNext" ${next ? '' : 'disabled'} title="Siguiente">›</button></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="seg" id="dSeg">${dirsHere.map(d => `<button data-d="${d}" style="--c:var(${DCOL[d]})" class="${d === mvState.dir ? 'on' : ''}">${DNAME[d]}</button>`).join('')}</div>
+      <div class="kpis" id="kpis" style="margin-top:12px"></div>
+      <p class="note">Zonas ISO 10816-1 clase ${['I','II','III','IV'][cls]} (orientativo): A &lt; ${ISO[cls][0]} · B &lt; ${ISO[cls][1]} · C &lt; ${ISO[cls][2]} mm/s. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]}${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
+    </div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Órdenes</h3><div class="tw"><table id="tOrd"></table></div>
+        </div>
+        <div class="card">
+          <h3>Picos principales</h3><div class="tw"><table id="tPk"></table></div>
+        </div>
+        <div class="card">
+          <h3>Datos</h3>
+          <div class="kv">
+            <span>Sensor</span><span>${esc(ms.sensor?.name || '–')} · ${esc(ms.sensor?.fw || '')}</span>
+            <span>Temperatura interna</span><span>${ms.sensor?.temp != null ? fmt(ms.sensor.temp, 3) + ' °C' : '–'}</span>
+            <span>Ejes</span><span>${esc(orientText(ms.orient))}</span>
+          </div>
+          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger" id="bDel">Borrar medida</button></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Espectro<span class="sp"></span><button class="sm" data-z="10">0–10×</button><button class="sm" data-z="all">Todo</button></h3>
+          <div class="row" style="margin-bottom:8px">
+            <label class="field"><span>Unidades</span><select id="unit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option><option value="gpk">Aceleración g pico</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Escala</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
+            <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)} · ${fmt(s.rpm, 5)} rpm · ${fmt(s.load, 3)} %</option>`).join('')}</select></label>
+          </div>
+          <canvas id="cvS"></canvas>
+          <div class="hint" id="sInfo"></div>
+        </div>
+        <div class="card">
+          <h3>Señal temporal<span class="sp"></span><span class="hint" id="tInfo"></span></h3>
+          <canvas id="cvT" class="short"></canvas>
+        </div>
+      </div>
+    </div>`;
+  $('#unit').value = mvState.unit; $('#yscale').value = mvState.yscale; $('#ref').value = mvState.ref;
+  const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => `  · ${(f/f1).toFixed(2)}×` });
+  const plotT = new Plot($('#cvT'), { xlab: 'Tiempo (s)', ylab: 'g', yunit: 'g', xfmt: x => fmt(x, 5) + ' s' });
+  let refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null;
+  const render = () => {
+    const d = mvState.dir, sp = getSpec(ms, d), unit = mvState.unit, ov = ms.overall?.[d] || overallOf(ms)[d];
+    const y = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], unit));
+    const a1 = orderAmp(sp.f, Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), f1, sp.df);
+    $('#kpis').innerHTML = `
+      <div class="kpi"><div class="l">Velocidad global</div><div class="v">${fmt(ov.v)}<small>mm/s</small></div><div class="s">${zoneTag(ov.v, cls)} 10–${fmt(Math.min(1000, fmax), 4)} Hz</div></div>
+      <div class="kpi"><div class="l">Aceleración RMS</div><div class="v">${fmt(ov.arms)}<small>g</small></div><div class="s">${fmt(ov.arms*G, 3)} m/s²</div></div>
+      <div class="kpi"><div class="l">Aceleración pico</div><div class="v">${fmt(ov.apk)}<small>g</small></div><div class="s">Factor de cresta ${fmt(ov.cf, 2)}</div></div>
+      <div class="kpi"><div class="l">1× · ${fmt(f1, 4)} Hz</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'pico en ' + fmt(a1.f, 4) + ' Hz' : ''}</div></div>`;
+    plotS.ylab = UNIT[unit]; plotS.yunit = unit === 'vrms' ? 'mm/s' : 'g';
+    plotS.logY = mvState.yscale === 'log'; plotS.zeroBase = !plotS.logY;
+    plotS.series = [{ name: refMeas ? fday(ms.when) : '', x: sp.f, y, color: DCOL[d] }];
+    if (refMeas && refMeas.dirs[d]?.length) {
+      const rs = getSpec(refMeas, d);
+      plotS.series.push({ name: fday(refMeas.when), x: rs.f, y: Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)), color: '--ref', width: 1.6, dash: [4,3] });
+    }
+    plotS.markers = Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' }));
+    plotS.draw();
+    $('#sInfo').textContent = `Δf ${fmt(sp.df, 3)} Hz${refMeas ? ' · en gris discontinuo: ' + fdate(refMeas.when) + (refMeas.cfg.mode !== ms.cfg.mode ? ' (otro rango)' : '') : ''} · arrastra para ampliar, doble clic para volver`;
+    // órdenes
+    const ords = [0.5,1,2,3,4,5,6].filter(k => k*f1 < fmax);
+    const vals = ords.map(k => orderAmp(sp.f, y, k*f1, sp.df)), A1 = vals[ords.indexOf(1)]?.y;
+    let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = ords.map(k => orderAmp(rs.f, ry, k*(refMeas.rpm/60), rs.df)); }
+    $('#tOrd').innerHTML = `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${rvals ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + ords.map((k, j) => {
+      const v = vals[j], r = rvals?.[j];
+      return `<tr><td>${k}×</td><td>${v ? fmt(v.f, 4) : '–'}</td><td>${v ? fmt(v.y) : '–'}</td>${rvals ? `<td>${r ? fmt(r.y) : '–'}</td><td>${v && r && r.y > 0 ? (v.y >= r.y ? '+' : '') + Math.round(100*(v.y/r.y - 1)) + ' %' : '–'}</td>` : `<td>${v && A1 ? Math.round(100*v.y/A1) + ' %' : '–'}</td>`}</tr>`;
+    }).join('');
+    // picos
+    const [x0, x1] = plotS.range() || [0, fmax];
+    const pk = findPeaks(sp.f, y, Math.max(x0, unit === 'vrms' ? 5 : 2), Math.min(x1, fmax));
+    $('#tPk').innerHTML = `<tr><th>#</th><th>Hz</th><th>${UNIT[unit]}</th><th>Orden</th></tr>` + pk.map((k, j) => `<tr><td>${j+1}</td><td>${fmt(sp.f[k], 4)}</td><td>${fmt(y[k])}</td><td>${(sp.f[k]/f1).toFixed(2)}×</td></tr>`).join('');
+    // tiempo
+    const blk = ms.dirs[d], cg = blk[blk.length-1]; let mean = 0; for (const v of cg) mean += v; mean /= cg.length;
+    plotT.series = [{ x: Float64Array.from(cg, (_, k) => k/ms.cfg.fs), y: Float64Array.from(cg, v => (v - mean)/100), color: DCOL[d] }];
+    plotT.draw();
+    $('#tInfo').textContent = `${(4096/ms.cfg.fs).toFixed(3)} s · Fs ${ms.cfg.fs} Hz`;
+  };
+  plotS.onzoom = () => setTimeout(render, 0);
+  $$('#dSeg button').forEach(b => b.onclick = () => { mvState.dir = b.dataset.d; $$('#dSeg button').forEach(x => x.classList.toggle('on', x === b)); render(); });
+  $('#unit').onchange = () => { mvState.unit = $('#unit').value; render(); };
+  $('#yscale').onchange = () => { mvState.yscale = $('#yscale').value; render(); };
+  $('#ref').onchange = async () => { mvState.ref = $('#ref').value; refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null; render(); };
+  $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' ? [0, Math.min(10.5*f1, fmax)] : null; render(); });
+  $('#bPrev').onclick = () => prev && (location.hash = '#/m/' + prev.id);
+  $('#bNext').onclick = () => next && (location.hash = '#/m/' + next.id);
+  $('#bCsv').onclick = () => exportCSV(ms, pt, m, p);
+  $('#bDel').onclick = async () => { if (confirmDel('esta medida')) { await DB.del('measurements', ms.id); location.hash = '#/p/' + pt.id; } };
+  render();
+}
+
+/* ---------------- Ajustes ---------------- */
+async function vSettings() {
+  const st = Sensor.lastStatus || {}, inf = Sensor.info || {};
+  let usage = '';
+  try { const e = await navigator.storage.estimate(); usage = `${(e.usage/1048576).toFixed(1)} MB usados`; } catch (e) {}
+  const counts = await Promise.all(['plants','machines','points','measurements'].map(s => DB.all(s).then(a => a.length)));
+  view.innerHTML = `
+    <div class="titlebar"><h2>Ajustes</h2><span class="sp"></span><span class="hint">Versión ${APP_VERSION}</span></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Sensor</h3>
+          ${Sensor.connected() ? `<div class="kv">
+            <span>Nombre</span><span>${esc(inf.name || '–')}</span><span>Modelo</span><span>${esc(inf.model || '–')}</span>
+            <span>Firmware</span><span>${esc(inf.fw || '–')}</span><span>Batería</span><span>${st.battery != null ? st.battery + ' %' : '–'}</span>
+            <span>Temperatura interna</span><span>${st.temp != null ? st.temp.toFixed(1) + ' °C' : '–'}</span><span>Contador</span><span>${st.counter ?? '–'}</span></div>
+            <div class="row" style="margin-top:10px"><button class="sm" id="bStat">Actualizar</button></div>`
+          : '<p class="note" style="margin-top:0">Sin conectar. Si no aparece al pulsar Conectar, despiértalo con un toque de imán en el icono «U» o sacando y metiendo la pila: anuncia durante 1 h.</p>'}
+        </div>
+        <div class="card">
+          <h3>Adquisición</h3>
+          <label class="chk"><input type="checkbox" id="quiet" ${pref.get('quiet', true) ? 'checked' : ''}> Desconectar el Bluetooth durante la medida (sin ruido de la radio)</label>
+          <div class="row" style="margin-top:12px">
+            <label class="field"><span>Canal X</span><input type="number" id="codeX" value="${pref.get('codeX', 4)}"></label>
+            <label class="field"><span>Canal Y</span><input type="number" id="codeY" value="${pref.get('codeY', 2)}"></label>
+            <label class="field"><span>Canal Z</span><input type="number" id="codeZ" value="${pref.get('codeZ', 1)}"></label>
+            <label class="field"><span>Bloque BLE</span><input type="number" id="blk" min="1" max="120" value="${pref.get('blk', 120)}"></label>
+          </div>
+          <p class="note">Canales verificados con firmware 4.1.3: X = 4, Y = 2, Z = 1. Solo hay que tocarlos si cambia el firmware.</p>
+        </div>
+        <div class="card">
+          <h3>Datos</h3>
+          <div class="kv"><span>Barcos</span><span>${counts[0]}</span><span>Máquinas</span><span>${counts[1]}</span><span>Puntos</span><span>${counts[2]}</span><span>Medidas</span><span>${counts[3]}</span>${usage ? `<span>Almacenamiento</span><span>${usage}</span>` : ''}</div>
+          <div class="row" style="margin-top:12px">
+            <button class="pri" id="bSave">Guardar copia (.json)</button>
+            <button id="bOpen">Abrir copia…</button>
+            <input type="file" id="fOpen" accept=".json,application/json" hidden>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="sm" id="bSample">Cargar datos de ejemplo</button>
+            <button class="sm danger" id="bWipe">Borrar todos los datos</button>
+          </div>
+          <p class="note">Los datos se guardan en este navegador y funcionan sin conexión. Guarda una copia de vez en cuando: sirve de respaldo y para pasar los datos del móvil al PC (al abrirla se combinan con los existentes).</p>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Técnico · explorador GATT</h3>
+          <div class="row"><button class="sm" id="bDiag">Listar servicios</button><button class="sm" id="bDump">Volcar todo</button></div>
+          <div class="row" style="margin-top:10px">
+            <label class="field"><span>Característica</span><input id="xCh" placeholder="da03"></label>
+            <label class="field"><span>Hex</span><input id="xHex" placeholder="01 00 00 78"></label>
+          </div>
+          <div class="row" style="margin-top:8px"><button class="sm" id="bXr">Leer</button><button class="sm" id="bXw">Escribir</button><button class="sm" id="bXwr">Escribir y leer</button></div>
+          <p class="note">Protocolo firmware 4.x: FA01 = canal → FA10 (escribir 00, leer, reescribir; byte 2 = modo) → B303 = 0x81 (sin BLE) o 0x01 → DA03 [canal, índice BE, nº] → int16 BE en cg.</p>
+        </div>
+        <div class="card">
+          <h3>Registro<span class="sp"></span><button class="sm" id="bCopy">Copiar</button></h3>
+          <pre id="log"></pre>
+        </div>
+      </div>
+    </div>`;
+  $('#log').replaceChildren(...logBuf.map(e => e.cloneNode(true)));
+  if ($('#bStat')) $('#bStat').onclick = async () => { Sensor.lastStatus = await Sensor.status(); route(); };
+  $('#quiet').onchange = () => pref.set('quiet', $('#quiet').checked);
+  for (const k of ['codeX','codeY','codeZ','blk']) $('#' + k).onchange = () => pref.set(k, +$('#' + k).value);
+  $('#bSave').onclick = saveBackup;
+  $('#bOpen').onclick = () => $('#fOpen').click();
+  $('#fOpen').onchange = e => { if (e.target.files[0]) openBackup(e.target.files[0]); e.target.value = ''; };
+  $('#bSample').onclick = async () => { await makeSample(); location.hash = '#/'; };
+  $('#bWipe').onclick = async () => {
+    if (!confirm('¿Borrar TODOS los barcos, máquinas, puntos y medidas de este dispositivo?')) return;
+    if (prompt('Escribe BORRAR para confirmar') !== 'BORRAR') return;
+    for (const s of ['plants','machines','points','measurements']) await DB.clear(s);
+    route();
+  };
+  $('#bDiag').onclick = listSvcs; $('#bDump').onclick = dumpAll;
+  $('#bXr').onclick = () => xOp(false, true); $('#bXw').onclick = () => xOp(true, false); $('#bXwr').onclick = () => xOp(true, true);
+  $('#bCopy').onclick = () => navigator.clipboard?.writeText(logBuf.map(e => e.textContent).reverse().join('\n')).then(() => log('Registro copiado', 'ok'));
+}
+
+/* =====================================================================
+   Copia de seguridad (formato preparado para sincronizar)
+   ===================================================================== */
+function download(name, text, type) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+async function saveBackup() {
+  const [plants, machines, points, measurements] = await Promise.all(['plants','machines','points','measurements'].map(s => DB.all(s)));
+  const out = { app: 'vibra8531', schema: 1, exported: nowIso(), plants, machines, points,
+    measurements: measurements.map(x => ({ ...x, dirs: Object.fromEntries(Object.entries(x.dirs).map(([d, bl]) => [d, bl.map(b => Array.from(b))])) })) };
+  download(`vibra8531_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(out), 'application/json');
+  log(`Copia guardada: ${plants.length} barcos, ${measurements.length} medidas`, 'ok');
+}
+function openBackup(file) {
+  const rd = new FileReader();
+  rd.onload = async () => {
+    try {
+      const j = JSON.parse(rd.result);
+      if (j.app !== 'vibra8531') throw new Error('no es una copia de Vibra 8531');
+      let n = 0;
+      for (const s of ['plants','machines','points']) for (const o of j[s] || []) { await DB.put(s, o, false); n++; }
+      for (const o of j.measurements || []) {
+        o.dirs = Object.fromEntries(Object.entries(o.dirs).map(([d, bl]) => [d, bl.map(b => Int16Array.from(b))]));
+        await DB.put('measurements', o, false); n++;
+      }
+      alert(`Copia abierta: ${(j.measurements || []).length} medidas en ${(j.plants || []).length} barcos.`);
+      location.hash = '#/'; route();
+    } catch (e) { alert('No se pudo abrir la copia: ' + e.message); }
+  };
+  rd.readAsText(file);
+}
+function exportCSV(ms, pt, m, p) {
+  const ds = DIRS.filter(d => ms.dirs[d]?.length);
+  let s = `# Vibra 8531\n# Barco;${p.name}\n# Máquina;${m.name}\n# Punto;${pt.code || ''} ${pt.name}\n# Fecha;${ms.when}\n# rpm;${ms.rpm}\n# Carga %;${ms.load}\n# Sensor;${orientText(ms.orient)}\n# Fs Hz;${ms.cfg.fs}\n\n`;
+  s += `t_s,${ds.map(d => d + '_g').join(',')}\n`;
+  for (let i = 0; i < N_TIME; i++) s += (i/ms.cfg.fs).toFixed(6) + ',' + ds.map(d => (ms.dirs[d][ms.dirs[d].length-1][i]/100).toFixed(2)).join(',') + '\n';
+  s += `\nf_Hz,${ds.map(d => `${d}_mm_s_rms,${d}_g_rms`).join(',')}\n`;
+  const sps = ds.map(d => getSpec(ms, d));
+  for (let k = 0; k < sps[0].f.length; k++) s += sps[0].f[k].toFixed(4) + ',' + sps.map(sp => `${conv(sp.gpk[k], sp.f[k], 'vrms').toExponential(4)},${conv(sp.gpk[k], sp.f[k], 'grms').toExponential(4)}`).join(',') + '\n';
+  download(`vibra8531_${(pt.code || pt.name).replace(/\W+/g, '_')}_${ms.when.slice(0,16).replace(/[:T]/g, '-')}.csv`, s, 'text/csv');
+}
+
+/* =====================================================================
+   Datos de ejemplo
+   ===================================================================== */
+function synth(fs, f1, a1, a2, seed) {
+  const cg = new Int16Array(N_TIME); let r = seed;
+  const rnd = () => (r = (r*16807) % 2147483647) / 2147483647;
+  const ph = [rnd()*6.28, rnd()*6.28, rnd()*6.28];
+  for (let i = 0; i < N_TIME; i++) {
+    const t = i/fs;
+    let v = a1*Math.sin(2*Math.PI*f1*t + ph[0]) + a2*Math.sin(2*Math.PI*2*f1*t + ph[1]) + 0.006*Math.sin(2*Math.PI*3*f1*t + ph[2]) + 0.01*Math.sin(2*Math.PI*100*t);
+    v += 0.006*(rnd() + rnd() + rnd() - 1.5)*2;
+    cg[i] = Math.round(v*100);
+  }
+  return cg;
+}
+async function makeSample() {
+  const p = { id: uid(), created: nowIso(), name: 'Buque de ejemplo', code: 'IMO 0000000', notes: 'Datos sintéticos para probar la app' };
+  await DB.put('plants', p);
+  const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, iso: 1, notes: '' };
+  await DB.put('machines', m);
+  const pts = [
+    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado acoplamiento', code: 'M1', cfg: { mode: 1, navg: 2, win: 1 }, orient: { z: 'V', x: 'H' } },
+    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado libre', code: 'M2', cfg: { mode: 1, navg: 2, win: 1 }, orient: { z: 'V', x: 'H' } }];
+  for (const pt of pts) await DB.put('points', pt);
+  const fs = MODES[1];
+  for (let k = 0; k < 6; k++) {
+    for (const [j, pt] of pts.entries()) {
+      const rpm = 1476 + Math.round(Math.random()*6), f1 = rpm/60, unb = 0.02 + 0.012*k*(j ? 0.5 : 1);
+      const when = new Date(Date.now() - (5 - k)*30*864e5 - j*36e5).toISOString();
+      const meas = { id: uid(), pointId: pt.id, when, rpm, load: 70 + Math.round(Math.random()*15), note: k === 5 ? 'Ruido algo mayor' : '', demo: true,
+        orient: pt.orient, axisMap: orientMap(pt.orient), cfg: { mode: 1, fs, navg: 2, win: 1 }, quiet: true, unit: 'cg', sensor: { name: '8531 demo', fw: 'sintético' },
+        dirs: { H: [synth(fs, f1, unb, 0.008, 11+k), synth(fs, f1, unb, 0.008, 21+k)], V: [synth(fs, f1, unb*0.6, 0.006, 31+k), synth(fs, f1, unb*0.6, 0.006, 41+k)], A: [synth(fs, f1, 0.008, 0.012 + 0.004*k, 51+k), synth(fs, f1, 0.008, 0.012 + 0.004*k, 61+k)] } };
+      meas.overall = overallOf(meas);
+      await DB.put('measurements', meas, false);
+    }
+  }
+  log('Datos de ejemplo creados', 'ok');
+}
+
+/* =====================================================================
+   Explorador GATT
+   ===================================================================== */
+const short = u => (u.startsWith('b614') || u.startsWith('0000')) ? u.slice(4,8) : u;
+const needConn = () => { if (!Sensor.connected()) { log('Conecta primero el sensor', 'warn'); return true; } return false; };
+async function allChars() {
+  const out = [];
+  for (const sv of await Sensor.q(() => Sensor.server.getPrimaryServices())) { try { out.push(...await Sensor.q(() => sv.getCharacteristics())); } catch (e) {} }
+  return out;
+}
+async function listSvcs() {
+  if (needConn()) return;
+  const lines = (await allChars()).map(ch => { const p = ch.properties; return `${short(ch.service.uuid)}/${short(ch.uuid)}  [${[p.read && 'R', (p.write || p.writeWithoutResponse) && 'W', p.notify && 'N', p.indicate && 'I'].filter(Boolean).join('/')}]`; });
+  for (const l of lines.reverse()) log(l);
+  log('Servicios y características:', 'ok');
+}
+async function dumpAll() {
+  if (needConn()) return;
+  const lines = [];
+  for (const ch of await allChars()) { if (!ch.properties.read) continue; try { const dv = await Sensor.q(() => ch.readValue()); lines.push(`${short(ch.uuid)} [${dv.byteLength} B]: ${hex(dv)}`); } catch (e) { lines.push(`${short(ch.uuid)}: ${e.message}`); } }
+  for (const l of lines.reverse()) log(l);
+  log('Volcado:', 'ok');
+}
+async function findChar(k) { k = k.trim().toLowerCase(); for (const ch of await allChars()) if (short(ch.uuid) === k || ch.uuid === k) return ch; throw new Error('No encontrada: ' + k); }
+function parseHex(t) { const b = t.replace(/0x/gi,'').replace(/[^0-9a-f]/gi,''); if (b.length % 2) throw new Error('Hex impar'); return new Uint8Array((b.match(/../g) || []).map(x => parseInt(x,16))); }
+async function xOp(write, read) {
+  if (needConn()) return;
+  try {
+    const ch = await findChar($('#xCh').value);
+    if (write) { const b = parseHex($('#xHex').value); await Sensor.q(() => Sensor._w(ch, b)); log(`ESCRIBIR ${short(ch.uuid)}: ${hex(new DataView(b.buffer))}`, 'ok'); if (read) await sleep(200); }
+    if (read) { const dv = await Sensor.q(() => ch.readValue()); log(`LEER ${short(ch.uuid)} [${dv.byteLength} B]: ${hex(dv)}`); }
+  } catch (e) { log(e.message, 'err'); }
+}
+
+/* =====================================================================
+   Arranque
+   ===================================================================== */
+(async function init() {
+  if (!navigator.bluetooth) view.insertAdjacentHTML('beforebegin', '<div class="warnbox" style="max-width:1168px;margin:12px auto 0">Este navegador no tiene Web Bluetooth: puedes revisar datos, pero para medir usa Chrome o Edge (Android, Windows, macOS) abriendo la página por https o desde localhost.</div>');
+  try { await DB.open(); } catch (e) { view.innerHTML = `<div class="empty">No se pudo abrir la base de datos local: ${esc(e.message)}</div>`; return; }
+  try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
+  setChip(); route();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(e => log('Modo sin conexión no disponible: ' + e.message, 'warn'));
+})();
+</script>
+</body>
+</html>
