@@ -123,6 +123,7 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 <main id="view"></main>
 <nav class="bottomnav">
   <a href="#/" id="navA">Barcos</a>
+  <a href="#/libre" id="navL">Medida libre</a>
   <a href="#/ajustes" id="navS">Ajustes</a>
 </nav>
 <dialog id="dlg"></dialog>
@@ -178,7 +179,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const DB = {
   db: null,
   open() {
@@ -640,9 +641,11 @@ const view = $('#view');
 function crumbs(parts) {
   return `<nav class="crumbs">${parts.map(([href, t], i) => (i ? '<span class="sep">›</span>' : '') + (href ? `<a href="${href}">${esc(t)}</a>` : `<span>${esc(t)}</span>`)).join('')}</nav>`;
 }
+let freeView = false;
 async function route() {
   const h = location.hash || '#/', [, kind, id] = h.split('/');
-  $('#navA').classList.toggle('act', kind !== 'ajustes');
+  $('#navA').classList.toggle('act', !['ajustes','libre'].includes(kind) && !(kind === 'm' && freeView));
+  $('#navL').classList.toggle('act', kind === 'libre' || (kind === 'm' && freeView));
   $('#navS').classList.toggle('act', kind === 'ajustes');
   try {
     if (!kind) await vPlants();
@@ -651,6 +654,7 @@ async function route() {
     else if (kind === 'p') await vPoint(id);
     else if (kind === 'm') await vMeas(id);
     else if (kind === 'ajustes') await vSettings();
+    else if (kind === 'libre') await vFree();
     else await vPlants();
   } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
   setChip();
@@ -784,13 +788,7 @@ async function vPoint(id) {
             <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="mRpm" inputmode="decimal" min="1" step="any" value="${lastRpm ?? ''}"></label>
             <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${lastLoad}" placeholder="0–100"></label>
           </div>
-          <div class="field" style="margin-top:12px"><span>Posición del sensor</span>
-            <div class="orient">
-              <label class="field"><small>Z (perpendicular a la base) apunta en</small><select id="oZ">${DIRS.map(d => `<option value="${d}" ${o.z === d ? 'selected' : ''}>${DNAME[d]}</option>`).join('')}</select></label>
-              <label class="field"><small>X (flecha de la base) apunta en</small><select id="oX"></select></label>
-            </div>
-            <div class="omap" id="oMap"></div>
-          </div>
+          ${orientHTML(o)}
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
           <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
           <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
@@ -811,15 +809,7 @@ async function vPoint(id) {
         </div>
       </div>
     </div>`;
-  // orientación
-  const fillX = () => {
-    const z = $('#oZ').value, cur = $('#oX').value || o.x;
-    const opts = DIRS.filter(d => d !== z);
-    $('#oX').innerHTML = opts.map(d => `<option value="${d}" ${d === cur ? 'selected' : ''}>${DNAME[d]}</option>`).join('');
-    const om = orientMap({ z, x: $('#oX').value });
-    $('#oMap').innerHTML = 'Resultado: ' + SAX.map(a => `${a} → <b>${DNAME[om[a]]}</b>`).join(' · ');
-  };
-  $('#oZ').onchange = fillX; $('#oX').onchange = fillX; fillX();
+  bindOrient(o);
   $$('tr.clk').forEach(tr => tr.onclick = () => location.hash = '#/m/' + tr.dataset.id);
   // tendencia
   const tr = new Plot($('#cvTr'), { xtime: true, ylab: 'mm/s RMS', yunit: 'mm/s', zeroBase: true, empty: 'La tendencia aparecerá con las medidas',
@@ -847,38 +837,218 @@ async function vPoint(id) {
   $('#bMeas').onclick = () => measurePoint(pt, m);
 }
 
-async function measurePoint(pt, mach) {
-  if (busy || !Sensor.connected()) return;
-  const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
-  if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
-  if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
-  const orient = { z: $('#oZ').value, x: $('#oX').value }, om = orientMap(orient);
-  const cfg = pt.cfg, fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
+function orientHTML(o) {
+  return `<div class="field" style="margin-top:12px"><span>Posición del sensor</span>
+    <div class="orient">
+      <label class="field"><small>Z (perpendicular a la base) apunta en</small><select id="oZ">${DIRS.map(d => `<option value="${d}" ${o.z === d ? 'selected' : ''}>${DNAME[d]}</option>`).join('')}</select></label>
+      <label class="field"><small>X (flecha de la base) apunta en</small><select id="oX"></select></label>
+    </div>
+    <div class="omap" id="oMap"></div></div>`;
+}
+function bindOrient(o) {
+  const fillX = () => {
+    const z = $('#oZ').value, cur = $('#oX').value || o.x;
+    $('#oX').innerHTML = DIRS.filter(d => d !== z).map(d => `<option value="${d}" ${d === cur ? 'selected' : ''}>${DNAME[d]}</option>`).join('');
+    const om = orientMap({ z, x: $('#oX').value });
+    $('#oMap').innerHTML = 'Resultado: ' + SAX.map(a => `${a} → <b>${DNAME[om[a]]}</b>`).join(' · ');
+  };
+  $('#oZ').onchange = fillX; $('#oX').onchange = fillX; fillX();
+}
+/* Mide los 3 ejes con la configuración dada y guarda la medida (pointId null = medida libre) */
+async function runMeasure({ cfg, orient, rpm, load, note, pointId }) {
+  const om = orientMap(orient), fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
-  const meas = { id: uid(), pointId: pt.id, when: nowIso(), rpm, load, note: $('#mNote').value.trim(), orient, axisMap: om,
+  const meas = { id: uid(), pointId: pointId || null, when: nowIso(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
                  cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
-  busy = true; setChip();
   const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
   const total = 3*cfg.navg; let step = 0;
+  busy = true; setChip();
   try {
-    try { const s = await Sensor.status(); meas.sensor.temp = s.temp; meas.sensor.battery = s.battery; } catch (e) {}
+    try { const st = await Sensor.status(); meas.sensor.temp = st.temp; meas.sensor.battery = st.battery; } catch (e) {}
     for (let r = 0; r < cfg.navg; r++) for (const ax of SAX) {
       const d = om[ax], tag = `${DNAME[d]} (${ax})${cfg.navg > 1 ? ` · ${r+1}/${cfg.navg}` : ''}`;
       const cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
-        onStage: s => prog(step/total, `${tag}: ${s}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
+        onStage: st => prog(step/total, `${tag}: ${st}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
       (meas.dirs[d] ||= []).push(cg);
       step++;
     }
     meas.overall = overallOf(meas);
     await DB.put('measurements', meas, false);
-    pt.orient = orient; await DB.put('points', pt);
-    log(`Medida guardada en ${pt.name}: ${DIRS.map(d => d + ' ' + fmt(meas.overall[d]?.v)).join(' · ')} mm/s`, 'ok');
-    busy = false; recIndicator(false);
-    location.hash = '#/m/' + meas.id;
+    log(`Medida ${pointId ? 'guardada' : 'libre'}: ${DIRS.map(d => d + ' ' + fmt(meas.overall[d]?.v)).join(' · ')} mm/s`, 'ok');
+    return meas;
   } catch (e) {
     log('Medida: ' + e.message, 'err'); prog(null, 'Error: ' + e.message + ' — la medida no se ha guardado.');
-    busy = false; recIndicator(false); setChip();
-  }
+    return null;
+  } finally { busy = false; recIndicator(false); setChip(); }
+}
+async function measurePoint(pt, mach) {
+  if (busy || !Sensor.connected()) return;
+  const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
+  if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
+  if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
+  const orient = { z: $('#oZ').value, x: $('#oX').value };
+  const meas = await runMeasure({ cfg: pt.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: pt.id });
+  if (!meas) return;
+  pt.orient = orient; await DB.put('points', pt);
+  location.hash = '#/m/' + meas.id;
+}
+
+/* ---------------- Medida libre (fuera de ruta) ---------------- */
+async function vFree() {
+  const loose = (await DB.all('measurements')).filter(x => !x.pointId).sort(byWhen);
+  const c = pref.get('freeCfg', { mode: 1, navg: 1, win: 1 }), o = pref.get('freeOrient', orientDefault), cls = pref.get('freeIso', 1);
+  view.innerHTML = `
+    <div class="titlebar"><div><h2>Medida libre</h2><div class="sub">Mide sin ruta para explorar. Si interesa, guárdala después en un punto.</div></div></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Configuración</h3>
+          <label class="field"><span>Rango</span><select id="fMode">${MODES.map((_, m) => `<option value="${m}" ${m === c.mode ? 'selected' : ''}>${modeLabel(m)}</option>`).join('')}</select></label>
+          <div class="row" style="margin-top:10px">
+            <label class="field"><span>Promedios</span><select id="fNavg">${[1,2,4,8].map(n => `<option ${n === c.navg ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span>Ventana</span><select id="fWin">${[[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']].map(([v, n]) => `<option value="${v}" ${v === c.win ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span>Clase ISO</span><select id="fIso">${ISO_NAME.map((n, i) => `<option value="${i}" ${i === cls ? 'selected' : ''}>${['I','II','III','IV'][i]}</option>`).join('')}</select></label>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <label class="field"><span>Velocidad (rpm)</span><input type="number" id="mRpm" inputmode="decimal" min="0" step="any" value="${pref.get('freeRpm', '') ?? ''}" placeholder="opcional"></label>
+            <label class="field"><span>Carga (%)</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" placeholder="opcional"></label>
+          </div>
+          ${orientHTML(o)}
+          <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="p. ej. ventilador sala máquinas, carcasa lado libre"></label>
+          <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
+          <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Bandeja de medidas libres (${loose.length})<span class="sp"></span>${loose.length ? '<button class="sm danger" id="bClrAll">Descartar todas</button>' : ''}</h3>
+          ${loose.length ? `<div class="list">${loose.map(x => `<a class="item" href="#/m/${x.id}"><div class="m">
+              <div class="t">${fdate(x.when)}${x.note ? ' · ' + esc(x.note) : ''}</div>
+              <div class="d">${x.rpm ? fmt(x.rpm, 5) + ' rpm' : 'sin rpm'} · ${esc(modeLabel(x.cfg.mode).split(' · ').slice(-3, -1).join(' · '))}</div>
+              <div class="dirs" style="margin-top:4px">${DIRS.filter(d => x.overall?.[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(x.overall[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span></div>
+            </div><span class="chev">›</span></a>`).join('')}</div>
+            <p class="note">Las medidas libres se conservan aquí (también si cierras la app) hasta que las guardes en un punto o las descartes.</p>`
+          : '<div class="empty">Aún no hay medidas libres.</div>'}
+        </div>
+      </div>
+    </div>`;
+  bindOrient(o);
+  const saveCfg = () => {
+    pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value });
+    pref.set('freeIso', +$('#fIso').value);
+  };
+  for (const id of ['#fMode','#fNavg','#fWin','#fIso']) $(id).onchange = saveCfg;
+  if ($('#bClrAll')) $('#bClrAll').onclick = async () => {
+    if (!confirmDel(`las ${loose.length} medidas libres de la bandeja`)) return;
+    for (const x of loose) await DB.del('measurements', x.id);
+    route();
+  };
+  setChip();
+  $('#bMeas').onclick = async () => {
+    if (busy || !Sensor.connected()) return;
+    saveCfg();
+    const rpm = +$('#mRpm').value || null, load = $('#mLoad').value === '' ? null : +$('#mLoad').value;
+    const orient = { z: $('#oZ').value, x: $('#oX').value };
+    pref.set('freeOrient', orient); pref.set('freeRpm', rpm);
+    const meas = await runMeasure({ cfg: pref.get('freeCfg'), orient, rpm, load, note: $('#mNote').value.trim(), pointId: null });
+    if (meas) location.hash = '#/m/' + meas.id;
+  };
+}
+
+/* ---------------- Guardar una medida libre en un punto ---------------- */
+async function saveToPoint(ms) {
+  const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
+  const machines = await DB.all('machines'), points = await DB.all('points');
+  const allMs = await DB.all('measurements');
+  const nMeas = id => allMs.filter(x => x.pointId === id).length;
+  const sameCfg = pt => pt.cfg.mode === ms.cfg.mode && pt.cfg.navg === ms.cfg.navg && pt.cfg.win === ms.cfg.win;
+  const opt = (v, t, sel, dis) => `<option value="${esc(v)}" ${sel ? 'selected' : ''} ${dis ? 'disabled' : ''}>${esc(t)}</option>`;
+  return new Promise(resolve => {
+    const d = $('#dlg');
+    d.innerHTML = `<form method="dialog">
+      <h4>Guardar en un punto</h4>
+      <p class="note" style="margin:0">Configuración de esta medida: ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]}</p>
+      <label class="field"><span>Barco</span><select id="sPlant"></select></label>
+      <label class="field" id="wPlantNew" hidden><span>Nombre del barco nuevo *</span><input id="sPlantName"></label>
+      <label class="field"><span>Máquina</span><select id="sMach"></select></label>
+      <div id="wMachNew" hidden class="row">
+        <label class="field" style="flex-basis:100%"><span>Nombre de la máquina nueva *</span><input id="sMachName" placeholder="p. ej. Ventilador sala de máquinas"></label>
+        <label class="field"><span>Tipo</span><select id="sMachType">${MACH_TYPES.map(t => opt(t, t)).join('')}</select></label>
+        <label class="field"><span>rpm nominal *</span><input type="number" id="sMachRpm" step="any" min="1" value="${ms.rpm ?? ''}"></label>
+        <label class="field"><span>Clase ISO</span><select id="sMachIso">${ISO_NAME.map((n, i) => opt(i, n, i === pref.get('freeIso', 1))).join('')}</select></label>
+      </div>
+      <label class="field"><span>Punto</span><select id="sPt"></select><small id="sPtHint"></small></label>
+      <div id="wPtNew" hidden class="row">
+        <label class="field" style="flex-basis:60%"><span>Nombre del punto nuevo *</span><input id="sPtName" placeholder="p. ej. Motor lado acoplamiento"></label>
+        <label class="field"><span>Código</span><input id="sPtCode" placeholder="M1"></label>
+      </div>
+      <div class="row">
+        <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="sRpm" step="any" min="1" value="${ms.rpm ?? ''}"></label>
+        <label class="field"><span>Carga (%) *</span><input type="number" id="sLoad" step="any" min="0" max="150" value="${ms.load ?? ''}"></label>
+      </div>
+      <div class="acts"><button type="button" id="sCancel">Cancelar</button><button class="pri" id="sOk">Guardar</button></div>
+    </form>`;
+    const fillPlants = () => { $('#sPlant').innerHTML = plants.map((p, i) => opt(p.id, p.name, i === 0)).join('') + opt('__new', '➕ Nuevo barco…', !plants.length); onPlant(); };
+    const onPlant = () => {
+      const pid = $('#sPlant').value; $('#wPlantNew').hidden = pid !== '__new';
+      const ms_ = machines.filter(m => m.plantId === pid).sort((a, b) => a.name.localeCompare(b.name));
+      $('#sMach').innerHTML = ms_.map((m, i) => opt(m.id, m.name, i === 0)).join('') + opt('__new', '➕ Nueva máquina…', !ms_.length);
+      onMach();
+    };
+    const onMach = () => {
+      const mid = $('#sMach').value; $('#wMachNew').hidden = mid !== '__new';
+      const pts = points.filter(x => x.machineId === mid).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
+      let firstOk = null;
+      const html = pts.map(pt => {
+        const n = nMeas(pt.id), ok = !n || sameCfg(pt);
+        if (ok && !firstOk) firstOk = pt.id;
+        return opt(pt.id, `${pt.code ? pt.code + ' · ' : ''}${pt.name}${ok ? '' : ' (otra configuración)'}`, false, !ok);
+      }).join('');
+      $('#sPt').innerHTML = html + opt('__new', '➕ Nuevo punto…', false);
+      $('#sPt').value = firstOk || '__new';
+      onPt();
+    };
+    const onPt = () => {
+      const v = $('#sPt').value; $('#wPtNew').hidden = v !== '__new';
+      const pt = points.find(x => x.id === v);
+      $('#sPtHint').textContent = v === '__new' ? 'Se creará con la configuración de esta medida y quedará bloqueada.'
+        : pt && !nMeas(pt.id) && !sameCfg(pt) ? 'El punto aún no tiene medidas: se le asignará la configuración de esta medida.'
+        : 'Misma configuración: las medidas serán comparables.';
+    };
+    $('#sPlant').onchange = onPlant; $('#sMach').onchange = onMach; $('#sPt').onchange = onPt;
+    fillPlants();
+    let done = false;
+    const finish = v => { if (done) return; done = true; d.close(); resolve(v); };
+    $('#sCancel').onclick = () => finish(null);
+    d.onclose = () => finish(null);
+    d.querySelector('form').onsubmit = async e => {
+      e.preventDefault();
+      const need = (cond, el, msg) => { if (cond) return false; alert(msg); el?.focus(); return true; };
+      const rpm = +$('#sRpm').value, load = $('#sLoad').value === '' ? NaN : +$('#sLoad').value;
+      let pid = $('#sPlant').value, mid = $('#sMach').value, ptid = $('#sPt').value;
+      if (pid === '__new' && need($('#sPlantName').value.trim(), $('#sPlantName'), 'Pon nombre al barco nuevo.')) return;
+      if (mid === '__new' && need($('#sMachName').value.trim(), $('#sMachName'), 'Pon nombre a la máquina nueva.')) return;
+      if (mid === '__new' && need(+$('#sMachRpm').value > 0, $('#sMachRpm'), 'Indica las rpm nominales de la máquina.')) return;
+      if (ptid === '__new' && need($('#sPtName').value.trim(), $('#sPtName'), 'Pon nombre al punto nuevo.')) return;
+      if (need(rpm > 0, $('#sRpm'), 'Indica las rpm de la medida.')) return;
+      if (need(load >= 0 && load <= 150, $('#sLoad'), 'Indica la carga en % (0–100).')) return;
+      if (pid === '__new') { const p = { id: uid(), created: nowIso(), name: $('#sPlantName').value.trim(), code: '', notes: '' }; await DB.put('plants', p); pid = p.id; }
+      if (mid === '__new') { const m = { id: uid(), plantId: pid, created: nowIso(), name: $('#sMachName').value.trim(), type: $('#sMachType').value, location: '', rpm: +$('#sMachRpm').value, kw: null, iso: +$('#sMachIso').value, notes: '' }; await DB.put('machines', m); mid = m.id; }
+      if (ptid === '__new') {
+        const pt = { id: uid(), machineId: mid, created: nowIso(), name: $('#sPtName').value.trim(), code: $('#sPtCode').value.trim(), notes: '', cfg: { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win }, orient: ms.orient };
+        await DB.put('points', pt); ptid = pt.id;
+      } else {
+        const pt = await DB.get('points', ptid);
+        if (!nMeas(ptid) && !sameCfg(pt)) { pt.cfg = { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win }; }
+        pt.orient = ms.orient; await DB.put('points', pt);
+      }
+      ms.pointId = ptid; ms.rpm = rpm; ms.load = load;
+      await DB.put('measurements', ms, false);
+      log('Medida libre guardada en un punto', 'ok');
+      finish(ptid);
+    };
+    d.showModal();
+  });
 }
 
 /* ---------------- Medida ---------------- */
@@ -890,16 +1060,22 @@ function getSpec(meas, d) {
 }
 async function vMeas(id) {
   const ms = await DB.get('measurements', id); if (!ms) { location.hash = '#/'; return; }
-  const pt = await DB.get('points', ms.pointId), m = await DB.get('machines', pt.machineId), p = await DB.get('plants', m.plantId);
-  const sibs = (await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
+  const free = !ms.pointId; freeView = free;
+  $('#navA').classList.toggle('act', !free); $('#navL').classList.toggle('act', free);
+  const pt = free ? null : await DB.get('points', ms.pointId), m = free ? { iso: pref.get('freeIso', 1) } : await DB.get('machines', pt.machineId), p = free ? null : await DB.get('plants', m.plantId);
+  const sibs = (free ? (await DB.all('measurements')).filter(x => !x.pointId) : await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
   const dirsHere = DIRS.filter(d => ms.dirs[d]?.length);
   if (!dirsHere.includes(mvState.dir)) mvState.dir = dirsHere[0];
   if (mvState.ref && !sibs.some(s => s.id === mvState.ref && s.id !== ms.id)) mvState.ref = '';
-  const f1 = ms.rpm/60, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
+  const f1 = ms.rpm > 0 ? ms.rpm/60 : 0, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
   const i = sibs.findIndex(s => s.id === ms.id), prev = sibs[i+1], next = sibs[i-1];
-  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]]) + `
+  view.innerHTML = (free ? crumbs([['#/libre', 'Medida libre'], [null, fdate(ms.when)]])
+      : crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]])) + `
+    ${free ? `<div class="card" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-color:var(--acc)">
+      <div style="flex:1;min-width:200px"><b>Medida libre</b><div class="hint">No está asignada a ningún punto. Guárdala si quieres conservarla en el historial de una máquina.</div></div>
+      <button class="pri" id="bSaveTo">Guardar en un punto…</button></div>` : ''}
     <div class="titlebar"><div><h2>${fdate(ms.when)}</h2>
-      <div class="sub">${fmt(ms.rpm, 5)} rpm · carga ${fmt(ms.load, 3)} % · sensor ${esc(orientText(ms.orient))}${ms.note ? ' · ' + esc(ms.note) : ''}${ms.demo ? ' · <span class="tag">ejemplo</span>' : ''}</div></div>
+      <div class="sub">${ms.rpm ? fmt(ms.rpm, 5) + ' rpm' : 'sin rpm'} · ${ms.load != null ? 'carga ' + fmt(ms.load, 3) + ' %' : 'sin carga'} · sensor ${esc(orientText(ms.orient))}${ms.note ? ' · ' + esc(ms.note) : ''}${ms.demo ? ' · <span class="tag">ejemplo</span>' : ''}</div></div>
       <span class="sp"></span>
       <button class="sm" id="bPrev" ${prev ? '' : 'disabled'} title="Anterior">‹</button><button class="sm" id="bNext" ${next ? '' : 'disabled'} title="Siguiente">›</button></div>
     <div class="card" style="margin-bottom:12px">
@@ -922,7 +1098,7 @@ async function vMeas(id) {
             <span>Temperatura interna</span><span>${ms.sensor?.temp != null ? fmt(ms.sensor.temp, 3) + ' °C' : '–'}</span>
             <span>Ejes</span><span>${esc(orientText(ms.orient))}</span>
           </div>
-          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger" id="bDel">Borrar medida</button></div>
+          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
         </div>
       </div>
       <div class="col">
@@ -931,7 +1107,7 @@ async function vMeas(id) {
           <div class="row" style="margin-bottom:8px">
             <label class="field"><span>Unidades</span><select id="unit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option><option value="gpk">Aceleración g pico</option></select></label>
             <label class="field" style="flex:0 0 auto"><span>Escala</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
-            <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)} · ${fmt(s.rpm, 5)} rpm · ${fmt(s.load, 3)} %</option>`).join('')}</select></label>
+            <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)}${s.rpm ? ' · ' + fmt(s.rpm, 5) + ' rpm' : ''}${s.load != null ? ' · ' + fmt(s.load, 3) + ' %' : ''}${s.note ? ' · ' + esc(s.note) : ''}</option>`).join('')}</select></label>
           </div>
           <canvas id="cvS"></canvas>
           <div class="hint" id="sInfo"></div>
@@ -943,18 +1119,18 @@ async function vMeas(id) {
       </div>
     </div>`;
   $('#unit').value = mvState.unit; $('#yscale').value = mvState.yscale; $('#ref').value = mvState.ref;
-  const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => `  · ${(f/f1).toFixed(2)}×` });
+  const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => f1 ? `  · ${(f/f1).toFixed(2)}×` : '' });
   const plotT = new Plot($('#cvT'), { xlab: 'Tiempo (s)', ylab: 'g', yunit: 'g', xfmt: x => fmt(x, 5) + ' s' });
   let refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null;
   const render = () => {
     const d = mvState.dir, sp = getSpec(ms, d), unit = mvState.unit, ov = ms.overall?.[d] || overallOf(ms)[d];
     const y = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], unit));
-    const a1 = orderAmp(sp.f, Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), f1, sp.df);
+    const a1 = f1 ? orderAmp(sp.f, Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), f1, sp.df) : null;
     $('#kpis').innerHTML = `
       <div class="kpi"><div class="l">Velocidad global</div><div class="v">${fmt(ov.v)}<small>mm/s</small></div><div class="s">${zoneTag(ov.v, cls)} 10–${fmt(Math.min(1000, fmax), 4)} Hz</div></div>
       <div class="kpi"><div class="l">Aceleración RMS</div><div class="v">${fmt(ov.arms)}<small>g</small></div><div class="s">${fmt(ov.arms*G, 3)} m/s²</div></div>
       <div class="kpi"><div class="l">Aceleración pico</div><div class="v">${fmt(ov.apk)}<small>g</small></div><div class="s">Factor de cresta ${fmt(ov.cf, 2)}</div></div>
-      <div class="kpi"><div class="l">1× · ${fmt(f1, 4)} Hz</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'pico en ' + fmt(a1.f, 4) + ' Hz' : ''}</div></div>`;
+      <div class="kpi"><div class="l">1×${f1 ? ' · ' + fmt(f1, 4) + ' Hz' : ''}</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'pico en ' + fmt(a1.f, 4) + ' Hz' : 'sin rpm'}</div></div>`;
     plotS.ylab = UNIT[unit]; plotS.yunit = unit === 'vrms' ? 'mm/s' : 'g';
     plotS.logY = mvState.yscale === 'log'; plotS.zeroBase = !plotS.logY;
     plotS.series = [{ name: refMeas ? fday(ms.when) : '', x: sp.f, y, color: DCOL[d] }];
@@ -962,21 +1138,21 @@ async function vMeas(id) {
       const rs = getSpec(refMeas, d);
       plotS.series.push({ name: fday(refMeas.when), x: rs.f, y: Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)), color: '--ref', width: 1.6, dash: [4,3] });
     }
-    plotS.markers = Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' }));
+    plotS.markers = f1 ? Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' })) : [];
     plotS.draw();
     $('#sInfo').textContent = `Δf ${fmt(sp.df, 3)} Hz${refMeas ? ' · en gris discontinuo: ' + fdate(refMeas.when) + (refMeas.cfg.mode !== ms.cfg.mode ? ' (otro rango)' : '') : ''} · arrastra para ampliar, doble clic para volver`;
     // órdenes
-    const ords = [0.5,1,2,3,4,5,6].filter(k => k*f1 < fmax);
+    const ords = f1 ? [0.5,1,2,3,4,5,6].filter(k => k*f1 < fmax) : [];
     const vals = ords.map(k => orderAmp(sp.f, y, k*f1, sp.df)), A1 = vals[ords.indexOf(1)]?.y;
-    let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = ords.map(k => orderAmp(rs.f, ry, k*(refMeas.rpm/60), rs.df)); }
-    $('#tOrd').innerHTML = `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${rvals ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + ords.map((k, j) => {
+    let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = refMeas.rpm ? ords.map(k => orderAmp(rs.f, ry, k*(refMeas.rpm/60), rs.df)) : null; }
+    $('#tOrd').innerHTML = !f1 ? '<tr><td class="hint" style="text-align:left;white-space:normal">Sin rpm no se pueden calcular los órdenes. Puedes indicarlas al guardar la medida en un punto.</td></tr>' : `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${rvals ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + ords.map((k, j) => {
       const v = vals[j], r = rvals?.[j];
       return `<tr><td>${k}×</td><td>${v ? fmt(v.f, 4) : '–'}</td><td>${v ? fmt(v.y) : '–'}</td>${rvals ? `<td>${r ? fmt(r.y) : '–'}</td><td>${v && r && r.y > 0 ? (v.y >= r.y ? '+' : '') + Math.round(100*(v.y/r.y - 1)) + ' %' : '–'}</td>` : `<td>${v && A1 ? Math.round(100*v.y/A1) + ' %' : '–'}</td>`}</tr>`;
     }).join('');
     // picos
     const [x0, x1] = plotS.range() || [0, fmax];
     const pk = findPeaks(sp.f, y, Math.max(x0, unit === 'vrms' ? 5 : 2), Math.min(x1, fmax));
-    $('#tPk').innerHTML = `<tr><th>#</th><th>Hz</th><th>${UNIT[unit]}</th><th>Orden</th></tr>` + pk.map((k, j) => `<tr><td>${j+1}</td><td>${fmt(sp.f[k], 4)}</td><td>${fmt(y[k])}</td><td>${(sp.f[k]/f1).toFixed(2)}×</td></tr>`).join('');
+    $('#tPk').innerHTML = `<tr><th>#</th><th>Hz</th><th>${UNIT[unit]}</th><th>Orden</th></tr>` + pk.map((k, j) => `<tr><td>${j+1}</td><td>${fmt(sp.f[k], 4)}</td><td>${fmt(y[k])}</td><td>${f1 ? (sp.f[k]/f1).toFixed(2) + '×' : '–'}</td></tr>`).join('');
     // tiempo
     const blk = ms.dirs[d], cg = blk[blk.length-1]; let mean = 0; for (const v of cg) mean += v; mean /= cg.length;
     plotT.series = [{ x: Float64Array.from(cg, (_, k) => k/ms.cfg.fs), y: Float64Array.from(cg, v => (v - mean)/100), color: DCOL[d] }];
@@ -988,11 +1164,12 @@ async function vMeas(id) {
   $('#unit').onchange = () => { mvState.unit = $('#unit').value; render(); };
   $('#yscale').onchange = () => { mvState.yscale = $('#yscale').value; render(); };
   $('#ref').onchange = async () => { mvState.ref = $('#ref').value; refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null; render(); };
-  $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' ? [0, Math.min(10.5*f1, fmax)] : null; render(); });
+  $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' && f1 ? [0, Math.min(10.5*f1, fmax)] : null; render(); });
   $('#bPrev').onclick = () => prev && (location.hash = '#/m/' + prev.id);
   $('#bNext').onclick = () => next && (location.hash = '#/m/' + next.id);
-  $('#bCsv').onclick = () => exportCSV(ms, pt, m, p);
-  $('#bDel').onclick = async () => { if (confirmDel('esta medida')) { await DB.del('measurements', ms.id); location.hash = '#/p/' + pt.id; } };
+  $('#bCsv').onclick = () => exportCSV(ms, pt, free ? null : m, p);
+  if (free) $('#bSaveTo').onclick = async () => { const ptid = await saveToPoint(ms); if (ptid) { freeView = false; location.hash = '#/m/' + ms.id; route(); } };
+  $('#bDel').onclick = async () => { if (confirmDel(free ? 'esta medida libre' : 'esta medida')) { await DB.del('measurements', ms.id); location.hash = free ? '#/libre' : '#/p/' + pt.id; } };
   render();
 }
 
@@ -1111,13 +1288,13 @@ function openBackup(file) {
 }
 function exportCSV(ms, pt, m, p) {
   const ds = DIRS.filter(d => ms.dirs[d]?.length);
-  let s = `# Vibra 8531\n# Barco;${p.name}\n# Máquina;${m.name}\n# Punto;${pt.code || ''} ${pt.name}\n# Fecha;${ms.when}\n# rpm;${ms.rpm}\n# Carga %;${ms.load}\n# Sensor;${orientText(ms.orient)}\n# Fs Hz;${ms.cfg.fs}\n\n`;
+  let s = `# Vibra 8531\n# Barco;${p?.name ?? '(medida libre)'}\n# Máquina;${m?.name ?? ''}\n# Punto;${pt ? (pt.code || '') + ' ' + pt.name : ''}\n# Nota;${ms.note || ''}\n# Fecha;${ms.when}\n# rpm;${ms.rpm ?? ''}\n# Carga %;${ms.load ?? ''}\n# Sensor;${orientText(ms.orient)}\n# Fs Hz;${ms.cfg.fs}\n\n`;
   s += `t_s,${ds.map(d => d + '_g').join(',')}\n`;
   for (let i = 0; i < N_TIME; i++) s += (i/ms.cfg.fs).toFixed(6) + ',' + ds.map(d => (ms.dirs[d][ms.dirs[d].length-1][i]/100).toFixed(2)).join(',') + '\n';
   s += `\nf_Hz,${ds.map(d => `${d}_mm_s_rms,${d}_g_rms`).join(',')}\n`;
   const sps = ds.map(d => getSpec(ms, d));
   for (let k = 0; k < sps[0].f.length; k++) s += sps[0].f[k].toFixed(4) + ',' + sps.map(sp => `${conv(sp.gpk[k], sp.f[k], 'vrms').toExponential(4)},${conv(sp.gpk[k], sp.f[k], 'grms').toExponential(4)}`).join(',') + '\n';
-  download(`vibra8531_${(pt.code || pt.name).replace(/\W+/g, '_')}_${ms.when.slice(0,16).replace(/[:T]/g, '-')}.csv`, s, 'text/csv');
+  download(`vibra8531_${(pt ? pt.code || pt.name : 'libre').replace(/\W+/g, '_')}_${ms.when.slice(0,16).replace(/[:T]/g, '-')}.csv`, s, 'text/csv');
 }
 
 /* =====================================================================
