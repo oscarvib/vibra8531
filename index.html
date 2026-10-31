@@ -11,7 +11,7 @@
 <style>
 :root{--bg:#f3f4f6;--card:#fff;--fg:#1b2230;--muted:#687385;--line:#dfe3e8;--grid:#ebeef2;--plot:#fff;
 --acc:#e8711a;--acc2:#1f6fd1;--ok:#1d9a5b;--warn:#c58a12;--err:#c9362c;--ref:#9aa3af;
---dH:#d9473b;--dV:#2f6fd6;--dA:#1d9a5b;--zA:#1d9a5b;--zB:#7fb33a;--zC:#e0a21b;--zD:#d9473b}
+--dH:#d9473b;--dV:#2f6fd6;--dA:#1d9a5b;--k1:#8e44ad;--k2:#0e8a7e;--k3:#c0560f;--k4:#2471a3;--k5:#b03a6a;--k6:#6b7a2a;--zA:#1d9a5b;--zB:#7fb33a;--zC:#e0a21b;--zD:#d9473b}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1217;--card:#161b22;--fg:#e5e9ef;--muted:#8d97a6;--line:#29303a;--grid:#212831;--plot:#11161c;--ref:#5d6672;--dH:#ff6b5e;--dV:#5b9dff;--dA:#3ccf86}}
 :root[data-theme="dark"]{--bg:#0e1217;--card:#161b22;--fg:#e5e9ef;--muted:#8d97a6;--line:#29303a;--grid:#212831;--plot:#11161c;--ref:#5d6672;--dH:#ff6b5e;--dV:#5b9dff;--dA:#3ccf86}
 *{box-sizing:border-box}
@@ -111,6 +111,14 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 .bottomnav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:flex;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
 .bottomnav a{flex:1;text-align:center;padding:10px 0 12px;color:var(--muted);text-decoration:none;font-weight:600;font-size:13px}
 .bottomnav a.act{color:var(--acc)}
+.al{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;white-space:nowrap}
+.al0{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.al1{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.al2{background:color-mix(in srgb,var(--err) 18%,transparent);color:var(--err)}
+.alarmbox{border-radius:10px;padding:10px 12px;font-size:14px;margin-top:10px}
+.alarmbox.l1{background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.alarmbox.l2{background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 45%,transparent)}
+.alarmbox.l0{background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
 body.op .adm{display:none!important}
 .bdlay{display:grid;gap:12px;grid-template-columns:290px minmax(0,1fr);align-items:start}
 .tree{position:sticky;top:62px;max-height:calc(100vh - 140px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 8px}
@@ -198,7 +206,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.3';
+const APP_VERSION = '3.4';
 const DB = {
   db: null,
   open() {
@@ -559,8 +567,9 @@ class Plot {
     let lastLbl = -1e9;
     for (const mk of this.markers) {
       if (mk.x < x0 || mk.x > x1) continue; const xx = X(mk.x);
-      g.strokeStyle = C('--acc'); g.globalAlpha = .7; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.globalAlpha = 1;
-      if (xx - lastLbl > 26) { g.fillStyle = C('--acc'); g.fillText(mk.label, xx + 3, T + 2); lastLbl = xx; }
+      const mc = C(mk.color || '--acc');
+      g.strokeStyle = mc; g.globalAlpha = mk.weak ? .35 : .75; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.globalAlpha = 1;
+      if (!mk.weak && xx - lastLbl > 26) { g.fillStyle = mc; g.fillText(mk.label, xx + 3, T + 2 + (mk.row || 0)*12); lastLbl = xx; }
     }
     g.setLineDash([]);
     for (const s of vis) {
@@ -626,7 +635,7 @@ function formDialog(title, fields, vals={}, { okText='Guardar', danger=null } = 
     };
     d.querySelector('#dlgCancel').onclick = () => finish(null);
     if (danger) d.querySelector('#dlgDel').onclick = () => finish('__delete');
-    d.onclose = () => finish(null);
+    d.onclose = () => { if (!d.open) finish(null); };   // ignora el cierre retrasado de un diálogo anterior
     d.showModal();
   });
 }
@@ -709,7 +718,7 @@ window.addEventListener('hashchange', () => { if (!busy) route(); window.scrollT
 
 /* ---------------- Árbol de la base de datos ---------------- */
 let treeQuery = '';
-const ZDOT = z => z < 0 ? 'var(--line)' : `var(${ZCOL[z]})`;
+const ZDOT = z => z < 0 ? 'var(--line)' : `var(${['--ok','--warn','--err'][z]})`;
 async function refreshPointLast(pid) {
   const pt = await DB.get('points', pid); if (!pt) return;
   const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen)[0];
@@ -727,11 +736,11 @@ async function renderTree(sel) {
   if (sel.k === 'b') open.add(sel.id);
   pref.set('treeOpen', [...open]);
   const q = treeQuery.trim().toLowerCase(), hit = t => !q || t.toLowerCase().includes(q);
-  const zPt = (pt, m) => pt.last?.overall ? zoneOf(maxV(pt.last.overall), m.iso) : -1;
+  const zPt = (pt, m) => pt.last?.overall ? evalAlarm(pt.last.overall, pt, m).level : -1;
   const node = (k, id, name, z, ct, hasKids, isOpen, extra='') =>
     `<div class="tn ${sel.k === k && sel.id === id ? 'sel' : ''}" data-k="${k}" data-id="${id}">
       <span class="cr" data-tg="${hasKids ? id : ''}">${hasKids ? (isOpen ? '▾' : '▸') : ''}</span>
-      <span class="zd" style="background:${ZDOT(z)}" title="${z < 0 ? 'sin medidas' : 'zona ' + 'ABCD'[z]}"></span>
+      <span class="zd" style="background:${ZDOT(z)}" title="${z < 0 ? 'sin medidas' : ALNAME[z]}"></span>
       <span class="nm">${extra}${esc(name)}</span>${ct != null ? `<span class="ct">${ct}</span>` : ''}</div>`;
   let html = `<input id="tq" placeholder="Buscar…" value="${esc(treeQuery)}">
     <div class="tn ${sel.k === 'bd' ? 'sel' : ''}" data-k="bd"><span class="cr"></span><span class="nm"><b>Todos los barcos</b></span><span class="ct">${plants.length}</span></div>`;
@@ -757,7 +766,7 @@ async function renderTree(sel) {
     html += node('b', p.id, p.name, pz, ms_.length, ms_.length > 0, po) + (po && inner ? `<div class="tk">${inner}</div>` : '');
   }
   html += `<div class="row adm" style="margin-top:10px"><button class="sm" id="tNew">+ Barco</button><button class="sm" id="tAll">Expandir todo</button><button class="sm" id="tNone">Plegar</button></div>
-    <p class="hint" style="margin:8px 6px 0">● color = peor zona ISO de la última medida</p>`;
+    <p class="hint" style="margin:8px 6px 0">● última medida: <span style="color:var(--ok)">normal</span> · <span style="color:var(--warn)">aviso</span> · <span style="color:var(--err)">peligro</span></p>`;
   T.innerHTML = html;
   $$('#tree .tn').forEach(el => el.onclick = e => {
     const tg = e.target.closest('[data-tg]')?.dataset.tg;
@@ -773,11 +782,157 @@ async function renderTree(sel) {
   $('#tNone').onclick = () => { pref.set('treeOpen', []); renderTree(sel); };
 }
 
+
+/* =====================================================================
+   Alarmas y cinemática
+   ===================================================================== */
+const ALNAME = ['Normal', 'Aviso', 'Peligro'], ALCOL = ['--ok', '--warn', '--err'];
+function alarmCfg(pt, mach) {
+  const a = pt?.alarm || {}, cls = mach?.iso ?? 1;
+  return { warn: a.warn ?? ISO[cls][1], danger: a.danger ?? ISO[cls][2], absDefault: a.warn == null && a.danger == null,
+           relWarn: a.relWarn ?? 100, relDanger: a.relDanger ?? 300, relMin: a.relMin ?? 0.5, ref: a.ref || null };
+}
+function evalAlarm(overall, pt, mach) {
+  if (!overall) return { level: -1, reasons: [] };
+  const c = alarmCfg(pt, mach); let level = 0; const reasons = [];
+  for (const d of DIRS) {
+    const v = overall[d]?.v; if (v == null) continue;
+    if (v >= c.danger) { level = 2; reasons.push(`${d} ${fmt(v)} mm/s ≥ peligro ${fmt(c.danger)}`); }
+    else if (v >= c.warn) { level = Math.max(level, 1); reasons.push(`${d} ${fmt(v)} mm/s ≥ aviso ${fmt(c.warn)}`); }
+    const r = c.ref?.overall?.[d]?.v;
+    if (r > 0 && v >= c.relMin) {
+      const ch = 100*(v/r - 1);
+      if (ch >= c.relDanger) { level = 2; reasons.push(`${d} +${Math.round(ch)} % sobre la referencia (peligro ≥ +${c.relDanger} %)`); }
+      else if (ch >= c.relWarn) { level = Math.max(level, 1); reasons.push(`${d} +${Math.round(ch)} % sobre la referencia (aviso ≥ +${c.relWarn} %)`); }
+    }
+  }
+  return { level, reasons };
+}
+const alTag = lv => lv < 0 ? '<span class="hint">–</span>' : `<span class="al al${lv}">${lv === 2 ? '⛔' : lv === 1 ? '⚠' : '✓'} ${ALNAME[lv]}</span>`;
+const alBox = (a, ok='Sin alarmas') => a.level < 0 ? '' : `<div class="alarmbox l${a.level}"><b>${a.level ? (a.level === 2 ? '⛔ PELIGRO' : '⚠ AVISO') : '✓ ' + ok}</b>${a.reasons.length ? '<div style="margin-top:4px">' + a.reasons.map(esc).join('<br>') + '</div>' : ''}</div>`;
+
+/* --- Cinemática --- */
+const KTYPES = { bearing: 'Rodamiento', ind: 'Motor de inducción', pm: 'Motor de imanes permanentes', blades: 'Álabes (bomba, ventilador)', gear: 'Engrane', fixed: 'Frecuencia fija' };
+const gcd = (a, b) => b ? gcd(b, a % b) : a, lcm = (a, b) => a && b ? a*b/gcd(a, b) : 0;
+function bearingOrders(k) {
+  if (k.n > 0 && k.bd > 0 && k.pd > 0) {
+    const r = (k.bd/k.pd)*Math.cos((k.ang || 0)*Math.PI/180);
+    return { bpfo: k.n/2*(1 - r), bpfi: k.n/2*(1 + r), bsf: k.pd/(2*k.bd)*(1 - r*r), ftf: 0.5*(1 - r) };
+  }
+  return { bpfo: k.bpfo, bpfi: k.bpfi, bsf: k.bsf, ftf: k.ftf };
+}
+/* Lista de frecuencias características para una velocidad dada */
+function kinFreqs(mach, rpm) {
+  const out = [];
+  if (!mach?.kin?.length || !(rpm > 0)) return out;
+  mach.kin.forEach((k, i) => {
+    const col = `--k${i % 6 + 1}`, fr = rpm/60*(k.ratio || 1), nm = k.name || KTYPES[k.type];
+    const add = (lab, hz, main=true) => { if (hz > 0) out.push({ comp: nm, label: lab, hz, color: col, main }); };
+    if (k.type === 'bearing') {
+      const o = bearingOrders(k);
+      if (o.bpfo) { add('BPFO', o.bpfo*fr); add('2×BPFO', 2*o.bpfo*fr, false); add('3×BPFO', 3*o.bpfo*fr, false); }
+      if (o.bpfi) { add('BPFI', o.bpfi*fr); add('2×BPFI', 2*o.bpfi*fr, false); add('BPFI−1×', o.bpfi*fr - fr, false); add('BPFI+1×', o.bpfi*fr + fr, false); }
+      if (o.bsf) { add('BSF', o.bsf*fr); add('2×BSF', 2*o.bsf*fr, false); }
+      if (o.ftf) add('FTF', o.ftf*fr);
+    } else if (k.type === 'ind') {
+      const fl = k.fl || 50, poles = k.poles || 4, sync = 2*fl/poles, slip = Math.max(0, sync - fr);
+      add('2×FL', 2*fl);
+      if (poles && slip > 0) { add('1×−Fp', fr - poles*slip, false); add('1×+Fp', fr + poles*slip, false); }
+      if (k.bars) { add('RBPF', k.bars*fr); add('RBPF−2FL', k.bars*fr - 2*fl, false); add('RBPF+2FL', k.bars*fr + 2*fl, false); }
+      if (k.slots) add('Ranuras', k.slots*fr);
+    } else if (k.type === 'pm') {
+      const pp = (k.poles || 8)/2, fe = pp*fr;
+      add('fe', fe); add('2fe', 2*fe); add('6fe', 6*fe); add('12fe', 12*fe, false);
+      if (k.slots) { add('Ranuras', k.slots*fr); const cg = lcm(k.slots, k.poles || 8); if (cg) add('Cogging', cg*fr); }
+      if (k.fsw) { add('fsw', k.fsw); add('fsw−2fe', k.fsw - 2*fe, false); add('fsw+2fe', k.fsw + 2*fe, false); }
+    } else if (k.type === 'blades') {
+      add('BPF', k.z*fr); add('2×BPF', 2*k.z*fr, false);
+    } else if (k.type === 'gear') {
+      add('GMF', k.z*fr); add('2×GMF', 2*k.z*fr, false); add('GMF−1×', k.z*fr - fr, false); add('GMF+1×', k.z*fr + fr, false);
+    } else if (k.type === 'fixed') {
+      add(k.label || 'f', k.hz);
+    }
+  });
+  return out;
+}
+const KFIELDS = {
+  bearing: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Rodamiento lado acoplamiento 6309' },
+    { k: 'ratio', label: 'Relación de velocidad respecto al eje de referencia', type: 'number', def: 1, hint: '1 si gira con el eje de la máquina' },
+    { k: 'n', label: 'Nº de elementos rodantes', type: 'number', hint: 'Geometría (opcional): si la rellenas, se calculan las frecuencias' },
+    { k: 'bd', label: 'Diámetro del elemento rodante Bd (mm)', type: 'number' },
+    { k: 'pd', label: 'Diámetro primitivo Pd (mm)', type: 'number' },
+    { k: 'ang', label: 'Ángulo de contacto (°)', type: 'number', def: 0 },
+    { k: 'bpfo', label: 'BPFO (× rpm)', type: 'number', hint: 'O bien las frecuencias del fabricante, en órdenes del eje' },
+    { k: 'bpfi', label: 'BPFI (× rpm)', type: 'number' },
+    { k: 'bsf', label: 'BSF (× rpm)', type: 'number' },
+    { k: 'ftf', label: 'FTF (× rpm)', type: 'number' }],
+  ind: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Motor' },
+    { k: 'poles', label: 'Nº de polos (2p)', type: 'number', def: 4, req: true },
+    { k: 'fl', label: 'Frecuencia de red / alimentación (Hz)', type: 'number', def: 50, req: true },
+    { k: 'bars', label: 'Nº de barras del rotor', type: 'number' },
+    { k: 'slots', label: 'Nº de ranuras del estátor', type: 'number' },
+    { k: 'ratio', label: 'Relación de velocidad', type: 'number', def: 1 }],
+  pm: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Motor de propulsión PM' },
+    { k: 'poles', label: 'Nº de polos (2p)', type: 'number', def: 8, req: true },
+    { k: 'slots', label: 'Nº de ranuras del estátor', type: 'number' },
+    { k: 'fsw', label: 'Frecuencia de conmutación del convertidor (Hz)', type: 'number', hint: 'Opcional; suele quedar por encima del rango medido' },
+    { k: 'ratio', label: 'Relación de velocidad', type: 'number', def: 1 }],
+  blades: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Rodete' },
+    { k: 'z', label: 'Nº de álabes', type: 'number', req: true },
+    { k: 'ratio', label: 'Relación de velocidad', type: 'number', def: 1 }],
+  gear: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Piñón de entrada' },
+    { k: 'z', label: 'Nº de dientes', type: 'number', req: true },
+    { k: 'ratio', label: 'Relación de velocidad de ese eje', type: 'number', def: 1, hint: 'Velocidad del eje del engrane / velocidad de referencia' }],
+  fixed: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Red eléctrica' },
+    { k: 'label', label: 'Etiqueta corta', ph: 'p. ej. 2FL' },
+    { k: 'hz', label: 'Frecuencia (Hz)', type: 'number', req: true }]
+};
+async function editKin(m, idx) {
+  let k = idx != null ? { ...m.kin[idx] } : null;
+  if (!k) {
+    const t = await formDialog('Nuevo componente', [{ k: 'type', label: 'Tipo', type: 'select', options: Object.entries(KTYPES) }], {}, { okText: 'Siguiente' });
+    if (!t) return; k = { type: t.type };
+  }
+  const v = await formDialog(KTYPES[k.type], KFIELDS[k.type], k, idx != null ? { danger: 'Quitar componente' } : {});
+  if (!v) return;
+  m.kin ||= [];
+  if (v === '__delete') m.kin.splice(idx, 1);
+  else { const o = { id: k.id || uid(), type: k.type, ...v }; if (idx != null) m.kin[idx] = o; else m.kin.push(o); }
+  await DB.put('machines', m); route();
+}
+function kinCard(m) {
+  const fr = (m.rpm || 0)/60;
+  return `<div class="card" style="margin-top:12px">
+    <h3>Cinemática<span class="sp"></span><button class="sm adm" id="bKin">+ Componente</button></h3>
+    ${m.kin?.length ? `<div class="list">${m.kin.map((k, i) => {
+      const fq = kinFreqs({ kin: [k] }, m.rpm).filter(x => x.main);
+      return `<div class="item" data-ki="${i}" style="padding:10px 12px"><span class="dot" style="background:var(--k${i % 6 + 1});width:11px;height:11px"></span>
+        <div class="m"><div class="t" style="font-size:14px">${esc(k.name || KTYPES[k.type])} <span class="hint">· ${KTYPES[k.type]}${k.ratio && k.ratio != 1 ? ' · ×' + k.ratio : ''}</span></div>
+        <div class="d">${fq.map(x => `${esc(x.label)} ${fmt(x.hz, 4)} Hz${fr && k.type !== 'fixed' && x.label !== '2×FL' && !x.label.startsWith('fsw') ? ` <span class="hint">(${(x.hz/fr).toFixed(2)}×)</span>` : ''}`).join(' · ') || 'faltan datos'}</div></div>
+        <span class="chev adm">›</span></div>`;
+    }).join('')}</div><p class="note">Frecuencias a la velocidad nominal (${m.rpm} rpm). En cada medida se recalculan con sus rpm.</p>`
+    : '<p class="note" style="margin-top:0">Añade rodamientos, motor, álabes o engranes para marcar sus frecuencias de fallo en el espectro.</p>'}
+  </div>`;
+}
+
 /* ---------------- Barcos ---------------- */
 async function vPlants() {
   const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
-  const machines = await DB.all('machines');
+  const machines = await DB.all('machines'), points = await DB.all('points');
+  const alarms = points.map(pt => { const m = machines.find(x => x.id === pt.machineId); return { pt, m, a: evalAlarm(pt.last?.overall, pt, m) }; })
+    .filter(x => x.a.level > 0).sort((a, b) => b.a.level - a.a.level || (b.pt.last.when > a.pt.last.when ? 1 : -1));
   view.innerHTML = `
+    ${alarms.length ? `<div class="card" style="margin-bottom:12px;border-color:var(--warn)">
+      <h3>Puntos en alarma (${alarms.length})</h3>
+      <div class="list">${alarms.map(({ pt, m, a }) => `<a class="item" href="#/p/${pt.id}" style="padding:10px 12px">${alTag(a.level)}
+        <div class="m"><div class="t" style="font-size:14px">${esc(plants.find(p => p.id === m?.plantId)?.name || '')} › ${esc(m?.name || '')} › ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
+        <div class="d">${fday(pt.last.when)} · ${esc(a.reasons[0] || '')}${a.reasons.length > 1 ? ` (+${a.reasons.length - 1})` : ''}</div></div><span class="chev">›</span></a>`).join('')}</div></div>` : ''}
     <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="pri adm" id="bNew">+ Barco</button></div>
     <div class="list">${plants.length ? plants.map(p => {
       const n = machines.filter(m => m.plantId === p.id).length;
@@ -853,8 +1008,11 @@ async function vMachine(id) {
       const L = last[pt.id], ov = L.m?.overall;
       return `<a class="item" href="#/p/${pt.id}"><div class="m"><div class="t">${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
         <div class="d">${L.n ? `${L.n} medida${L.n === 1 ? '' : 's'} · última ${fdate(L.m.when)}` : 'Sin medidas'} · ${esc(modeLabel(pt.cfg.mode).split(' · ').slice(-3, -1).join(' · '))}</div>
-        ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${zoneTag(maxV(ov), m.iso)}</div>` : ''}</div><span class="chev">›</span></a>`;
-    }).join('') : '<div class="empty">Crea los puntos donde vas a medir (por ejemplo, cada alojamiento de rodamiento).</div>'}</div>`;
+        ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${alTag(evalAlarm(ov, pt, m).level)}</div>` : ''}</div><span class="chev">›</span></a>`;
+    }).join('') : '<div class="empty">Crea los puntos donde vas a medir (por ejemplo, cada alojamiento de rodamiento).</div>'}</div>
+    ${kinCard(m)}`;
+  $('#bKin').onclick = () => editKin(m, null);
+  if (!isOp()) $$('[data-ki]').forEach(el => el.onclick = () => editKin(m, +el.dataset.ki));
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar máquina', machineFields(m), m, { danger: 'Borrar máquina' });
     if (v === '__delete') { if (confirmDel(`la máquina «${m.name}» con sus puntos y medidas`)) { await delMachineDeep(m.id); location.hash = '#/b/' + p.id; } return; }
@@ -909,14 +1067,23 @@ async function vPoint(id) {
       </div>
       <div class="col">
         <div class="card">
+          <h3>Alarmas<span class="sp"></span><button class="sm adm" id="bAlarm">Configurar</button></h3>
+          ${(() => { const c = alarmCfg(pt, m), a = evalAlarm(ms[0]?.overall, pt, m);
+            return `<div class="kv">
+              <span>Aviso / peligro</span><span><b>${fmt(c.warn)}</b> / <b>${fmt(c.danger)}</b> mm/s${c.absDefault ? ' <span class="hint">(ISO clase ' + ['I','II','III','IV'][m.iso ?? 1] + ')</span>' : ''}</span>
+              <span>Referencia</span><span>${c.ref ? `${fday(c.ref.when)} · ${DIRS.filter(d => c.ref.overall?.[d]).map(d => d + ' ' + fmt(c.ref.overall[d].v)).join(' · ')} mm/s` : '<span class="hint">sin referencia (márcala desde una medida)</span>'}</span>
+              ${c.ref ? `<span>Relativa</span><span>aviso +${c.relWarn} % · peligro +${c.relDanger} % <span class="hint">(desde ${fmt(c.relMin)} mm/s)</span></span>` : ''}
+              <span>Estado actual</span><span>${alTag(a.level)}</span></div>${a.level > 0 ? alBox(a) : ''}`; })()}
+        </div>
+        <div class="card">
           <h3>Tendencia · velocidad global<span class="sp"></span><span class="hint">10–${fmt(Math.min(1000, MODES[cfg.mode]/2.56), 4)} Hz</span></h3>
           <canvas id="cvTr" class="short"></canvas>
-          <p class="note">Líneas de zona ISO 10816-1 clase ${['I','II','III','IV'][m.iso ?? 1]}. Pulsa sobre un punto para abrir la medida.</p>
+          <p class="note">Líneas de aviso y peligro del punto. Pulsa sobre un punto para abrir la medida.</p>
         </div>
         <div class="card">
           <h3>Medidas (${ms.length})</h3>
           ${ms.length ? `<div class="tw"><table><tr><th>Fecha</th><th>rpm</th><th>Carga</th>${DIRS.map(d => `<th><span class="dot" style="background:var(${DCOL[d]})"></span>${d}</th>`).join('')}<th></th></tr>
-            ${ms.map(x => `<tr class="clk" data-id="${x.id}"><td>${fdate(x.when)}</td><td>${fmt(x.rpm, 5)}</td><td>${fmt(x.load, 3)} %</td>${DIRS.map(d => `<td>${fmt(x.overall?.[d]?.v)}</td>`).join('')}<td>${zoneTag(maxV(x.overall), m.iso)}</td></tr>`).join('')}</table></div>
+            ${ms.map(x => `<tr class="clk" data-id="${x.id}"><td>${fdate(x.when)}</td><td>${fmt(x.rpm, 5)}</td><td>${fmt(x.load, 3)} %</td>${DIRS.map(d => `<td>${fmt(x.overall?.[d]?.v)}</td>`).join('')}<td>${alTag(evalAlarm(x.overall, pt, m).level)}</td></tr>`).join('')}</table></div>
             <p class="note">Velocidad global en mm/s RMS.</p>` : '<div class="empty">Sin medidas todavía.</div>'}
         </div>
       </div>
@@ -932,9 +1099,27 @@ async function vPoint(id) {
     return { name: d, x: Float64Array.from(rows, x => Date.parse(x.when)), y: Float64Array.from(rows, x => x.overall[d].v), color: DCOL[d], dots: true, width: 2 };
   });
   const lim = ISO[m.iso ?? 1];
-  tr.hlines = [{ y: lim[0], color: '--zB', label: 'A/B' }, { y: lim[1], color: '--zC', label: 'B/C', inRange: true }, { y: lim[2], color: '--zD', label: 'C/D' }];
+  tr.hlines = [];
   tr.onclick = x => { if (!asc.length) return; let best = asc[0]; for (const r of asc) if (Math.abs(Date.parse(r.when) - x) < Math.abs(Date.parse(best.when) - x)) best = r; location.hash = '#/m/' + best.id; };
   tr.draw();
+  // líneas de alarma en la tendencia
+  const ac = alarmCfg(pt, m);
+  tr.hlines = [{ y: ac.warn, color: '--warn', label: 'Aviso', inRange: true }, { y: ac.danger, color: '--err', label: 'Peligro' }];
+  tr.draw();
+  $('#bAlarm').onclick = async () => {
+    const a = pt.alarm || {}, cls = m.iso ?? 1;
+    const v = await formDialog('Alarmas del punto', [
+      { k: 'warn', label: 'Aviso (mm/s RMS)', type: 'number', min: 0, ph: `${ISO[cls][1]} (ISO clase ${['I','II','III','IV'][cls]}, límite B/C)`, hint: 'Vacío = valor ISO de la clase de la máquina' },
+      { k: 'danger', label: 'Peligro (mm/s RMS)', type: 'number', min: 0, ph: `${ISO[cls][2]} (límite C/D)` },
+      { k: 'relWarn', label: 'Aviso relativo (% sobre la referencia)', type: 'number', min: 0, def: 100 },
+      { k: 'relDanger', label: 'Peligro relativo (% sobre la referencia)', type: 'number', min: 0, def: 300 },
+      { k: 'relMin', label: 'Nivel mínimo para la alarma relativa (mm/s)', type: 'number', min: 0, def: 0.5, hint: 'Evita avisos por cambios relativos en niveles muy bajos' }],
+      a, a.ref ? { danger: 'Quitar referencia' } : {});
+    if (!v) return;
+    if (v === '__delete') { delete pt.alarm.ref; }
+    else pt.alarm = { ...a, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x == null ? undefined : x])) };
+    await DB.put('points', pt); route();
+  };
   // editar
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar punto', pointFields(pt, locked), { ...pt, ...pt.cfg }, { danger: 'Borrar punto' });
@@ -1132,7 +1317,7 @@ async function saveToPoint(ms) {
     let done = false;
     const finish = v => { if (done) return; done = true; d.close(); resolve(v); };
     $('#sCancel').onclick = () => finish(null);
-    d.onclose = () => finish(null);
+    d.onclose = () => { if (!d.open) finish(null); };   // ignora el cierre retrasado de un diálogo anterior
     d.querySelector('form').onsubmit = async e => {
       e.preventDefault();
       const need = (cond, el, msg) => { if (cond) return false; alert(msg); el?.focus(); return true; };
@@ -1180,6 +1365,8 @@ async function vMeas(id) {
   if (!dirsHere.includes(mvState.dir)) mvState.dir = dirsHere[0];
   if (mvState.ref && !sibs.some(s => s.id === mvState.ref && s.id !== ms.id)) mvState.ref = '';
   const f1 = ms.rpm > 0 ? ms.rpm/60 : 0, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
+  const kf = free ? [] : kinFreqs(m, ms.rpm).filter(x => x.hz < fmax);
+  if (!mvState.mk || (!kf.length && ['kin','both'].includes(mvState.mk))) mvState.mk = kf.length ? 'both' : 'ord';
   const i = sibs.findIndex(s => s.id === ms.id), prev = sibs[i+1], next = sibs[i-1];
   view.innerHTML = (free ? crumbs([['#/libre', 'Medida libre'], [null, fdate(ms.when)]])
       : crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]])) + `
@@ -1192,6 +1379,7 @@ async function vMeas(id) {
       <button class="sm" id="bPrev" ${prev ? '' : 'disabled'} title="Anterior">‹</button><button class="sm" id="bNext" ${next ? '' : 'disabled'} title="Siguiente">›</button></div>
     <div class="card" style="margin-bottom:12px">
       <div class="seg" id="dSeg">${dirsHere.map(d => `<button data-d="${d}" style="--c:var(${DCOL[d]})" class="${d === mvState.dir ? 'on' : ''}">${DNAME[d]}</button>`).join('')}</div>
+      <div id="alm"></div>
       <div class="kpis" id="kpis" style="margin-top:12px"></div>
       <p class="note">Zonas ISO 10816-1 clase ${['I','II','III','IV'][cls]} (orientativo): A &lt; ${ISO[cls][0]} · B &lt; ${ISO[cls][1]} · C &lt; ${ISO[cls][2]} mm/s. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]}${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
     </div>
@@ -1200,6 +1388,10 @@ async function vMeas(id) {
         <div class="card">
           <h3>Órdenes</h3><div class="tw"><table id="tOrd"></table></div>
         </div>
+        ${kf.length ? `<div class="card">
+          <h3>Frecuencias de fallo</h3><div class="tw"><table id="tKin"></table></div>
+          <p class="note">Amplitud máxima en ±1 % (mín. 2 líneas) alrededor de cada frecuencia. Toca una fila para ampliar el espectro allí.</p>
+        </div>` : ''}
         <div class="card">
           <h3>Picos principales</h3><div class="tw"><table id="tPk"></table></div>
         </div>
@@ -1212,7 +1404,7 @@ async function vMeas(id) {
             <span>Operador</span><span>${esc(ms.operator || '–')}</span>
             <span>Dispositivo</span><span>${esc(ms.device || '–')}</span>
           </div>
-          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger ${free ? '' : 'adm'}" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
+          <div class="row" style="margin-top:12px">${free ? '' : `<button class="sm adm" id="bRef">${alarmCfg(pt, m).ref?.id === ms.id ? '✓ Es la referencia' : 'Usar como referencia'}</button>`}<button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger ${free ? '' : 'adm'}" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
         </div>
       </div>
       <div class="col">
@@ -1221,6 +1413,7 @@ async function vMeas(id) {
           <div class="row" style="margin-bottom:8px">
             <label class="field"><span>Unidades</span><select id="unit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option><option value="gpk">Aceleración g pico</option></select></label>
             <label class="field" style="flex:0 0 auto"><span>Escala</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Marcadores</span><select id="mk"><option value="ord">Armónicos 1×</option>${kf.length ? '<option value="kin">Cinemática</option><option value="both">Ambos</option>' : ''}<option value="none">Ninguno</option></select></label>
             <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)}${s.rpm ? ' · ' + fmt(s.rpm, 5) + ' rpm' : ''}${s.load != null ? ' · ' + fmt(s.load, 3) + ' %' : ''}${s.note ? ' · ' + esc(s.note) : ''}</option>`).join('')}</select></label>
           </div>
           <canvas id="cvS"></canvas>
@@ -1232,7 +1425,8 @@ async function vMeas(id) {
         </div>
       </div>
     </div>`;
-  $('#unit').value = mvState.unit; $('#yscale').value = mvState.yscale; $('#ref').value = mvState.ref;
+  $('#unit').value = mvState.unit; $('#yscale').value = mvState.yscale; $('#ref').value = mvState.ref; $('#mk').value = mvState.mk;
+  if (!free) $('#alm').innerHTML = alBox(evalAlarm(ms.overall, pt, m), 'Sin alarmas: todos los valores dentro de los límites del punto');
   const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => f1 ? `  · ${(f/f1).toFixed(2)}×` : '' });
   const plotT = new Plot($('#cvT'), { xlab: 'Tiempo (s)', ylab: 'g', yunit: 'g', xfmt: x => fmt(x, 5) + ' s' });
   let refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null;
@@ -1252,7 +1446,18 @@ async function vMeas(id) {
       const rs = getSpec(refMeas, d);
       plotS.series.push({ name: fday(refMeas.when), x: rs.f, y: Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)), color: '--ref', width: 1.6, dash: [4,3] });
     }
-    plotS.markers = f1 ? Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' })) : [];
+    const mk = mvState.mk;
+    plotS.markers = [
+      ...(f1 && (mk === 'ord' || mk === 'both') ? Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' })) : []),
+      ...((mk === 'kin' || mk === 'both') ? kf.map(x => ({ x: x.hz, label: x.label, color: x.color, weak: !x.main, row: 1 })) : [])
+    ].sort((a, b) => a.x - b.x);
+    if (kf.length && $('#tKin')) {
+      $('#tKin').innerHTML = `<tr><th>Componente</th><th>Frecuencia</th><th>Hz</th><th>${UNIT[unit]}</th></tr>` + kf.filter(x => x.main).map(x => {
+        const a = orderAmp(sp.f, y, x.hz, sp.df);
+        return `<tr class="clk" data-hz="${x.hz}"><td style="white-space:normal"><span class="dot" style="background:var(${x.color})"></span>${esc(x.comp)}</td><td>${esc(x.label)}</td><td>${fmt(x.hz, 4)}</td><td>${a ? fmt(a.y) : '–'}</td></tr>`;
+      }).join('');
+      $$('#tKin tr[data-hz]').forEach(tr => tr.onclick = () => { const hz = +tr.dataset.hz; plotS.xr = [Math.max(0, hz*0.8 - 5*sp.df), Math.min(fmax, hz*1.2 + 5*sp.df)]; render(); });
+    }
     plotS.draw();
     $('#sInfo').textContent = `Δf ${fmt(sp.df, 3)} Hz${refMeas ? ' · en gris discontinuo: ' + fdate(refMeas.when) + (refMeas.cfg.mode !== ms.cfg.mode ? ' (otro rango)' : '') : ''} · arrastra para ampliar, doble clic para volver`;
     // órdenes
@@ -1277,6 +1482,13 @@ async function vMeas(id) {
   $$('#dSeg button').forEach(b => b.onclick = () => { mvState.dir = b.dataset.d; $$('#dSeg button').forEach(x => x.classList.toggle('on', x === b)); render(); });
   $('#unit').onchange = () => { mvState.unit = $('#unit').value; render(); };
   $('#yscale').onchange = () => { mvState.yscale = $('#yscale').value; render(); };
+  $('#mk').onchange = () => { mvState.mk = $('#mk').value; render(); };
+  if ($('#bRef')) $('#bRef').onclick = async () => {
+    if (alarmCfg(pt, m).ref?.id === ms.id) return;
+    if (!confirm('¿Usar esta medida como referencia (línea base) del punto? Las alarmas relativas se calcularán respecto a ella.')) return;
+    pt.alarm = { ...(pt.alarm || {}), ref: { id: ms.id, when: ms.when, rpm: ms.rpm, load: ms.load, overall: ms.overall } };
+    await DB.put('points', pt); route();
+  };
   $('#ref').onchange = async () => { mvState.ref = $('#ref').value; refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null; render(); };
   $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' && f1 ? [0, Math.min(10.5*f1, fmax)] : null; render(); });
   $('#bPrev').onclick = () => prev && (location.hash = '#/m/' + prev.id);
@@ -1317,18 +1529,20 @@ async function vRoutes() {
   const myDev = pref.get('device', '');
   const routes = (await DB.all('routes')).filter(r => !isOp() || !r.assignedTo || r.assignedTo === myDev), plants = await DB.all('plants');
   const rows = [];
-  for (const r of routes) rows.push({ r, s: await routeState(r), p: plants.find(x => x.id === r.plantId) });
+  const allPts = await DB.all('points'), allM = await DB.all('machines');
+  const nAl = r => r.points.map(id => allPts.find(x => x.id === id)).filter(pt => pt?.last?.overall && evalAlarm(pt.last.overall, pt, allM.find(m => m.id === pt.machineId)).level > 0).length;
+  for (const r of routes) rows.push({ r, s: await routeState(r), p: plants.find(x => x.id === r.plantId), na: nAl(r) });
   const rank = x => x.s.open ? 0 : x.s.days == null ? 1 : x.s.days < 0 ? 2 : 3;
   rows.sort((a, b) => rank(a) - rank(b) || (a.s.days ?? 0) - (b.s.days ?? 0) || a.r.name.localeCompare(b.r.name));
   view.innerHTML = `
     <div class="titlebar"><div><h2>Rutas</h2><div class="sub">Tareas programadas de medida</div></div><span class="sp"></span>${plants.length ? '<button class="pri adm" id="bNew">+ Ruta</button>' : ''}</div>
     ${isOp() ? await opBanner() : ''}
-    <div class="list">${rows.length ? rows.map(({ r, s: st, p }) => {
+    <div class="list">${rows.length ? rows.map(({ r, s: st, p, na }) => {
       const pr = st.open ? roundProgress(st.open, r) : null;
       return `<a class="item" href="#/r/${r.id}"><div class="m">
         <div class="t">${esc(r.name)}</div>
         <div class="d">${!isOp() ? (r.assignedTo ? '📱 ' + esc(r.assignedTo) + ' · ' : '📱 todos · ') : ''}${esc(p?.name || '¿barco borrado?')} · ${r.points.length} punto${r.points.length === 1 ? '' : 's'} · ${periodName(r.period)}${st.lastDone ? ' · última ' + fday(st.lastDone.finished) : ''}</div>
-        <div style="margin-top:6px">${stTag(st.st)}${pr ? ` <span class="hint">${pr.done}/${pr.total} puntos</span>` : ''}</div>
+        <div style="margin-top:6px">${stTag(st.st)}${na ? ` <span class="al al1">⚠ ${na} en alarma</span>` : ''}${pr ? ` <span class="hint">${pr.done}/${pr.total} puntos</span>` : ''}</div>
       </div><span class="chev">›</span></a>`;
     }).join('') : `<div class="empty">${isOp() ? 'No hay rutas en este móvil.<br><br><button class="pri" onclick="location.hash=\'#/sync\'">Recibir el plan de la oficina</button>' : plants.length
         ? 'Aún no hay rutas. Una ruta es una lista ordenada de puntos que se mide periódicamente.<br><br><button class="pri" id="bNew2">Crear la primera ruta</button>'
@@ -1384,7 +1598,7 @@ async function editRoute(r) {
     let done = false;
     const finish = v => { if (done) return; done = true; d.close(); resolve(v); };
     $('#rCancel').onclick = () => finish(null);
-    d.onclose = () => finish(null);
+    d.onclose = () => { if (!d.open) finish(null); };   // ignora el cierre retrasado de un diálogo anterior
     if (r) $('#rDel').onclick = async () => { if (confirmDel(`la ruta «${r.name}» y su historial de rondas (las medidas se conservan en sus puntos)`)) { await delRouteDeep(r.id); finish('del'); location.hash = '#/'; } };
     d.querySelector('form').onsubmit = async e => {
       e.preventDefault();
@@ -1434,7 +1648,7 @@ async function vRoute(id) {
             const pt = points.find(x => x.id === pid), m = machines.find(x => x.id === pt?.machineId), last = lastByPt[pid], ov = last?.overall;
             return `<a class="item" href="#/p/${pid}"><b style="width:22px">${i+1}</b><div class="m"><div class="t">${esc(m?.name || '')} › ${pt?.code ? esc(pt.code) + ' · ' : ''}${esc(pt?.name || '?')}</div>
               <div class="d">${last ? 'última medida ' + fday(last.when) : 'sin medidas'}</div>
-              ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${zoneTag(maxV(ov), m?.iso)}</div>` : ''}</div><span class="chev">›</span></a>`;
+              ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${alTag(evalAlarm(ov, pt, m).level)}</div>` : ''}</div><span class="chev">›</span></a>`;
           }).join('')}</div>
         </div>
       </div>
@@ -1496,7 +1710,7 @@ async function vRound(id) {
           <div style="font-size:16px;margin-top:2px">${cur.code ? '<b>' + esc(cur.code) + '</b> · ' : ''}${esc(cur.name)}</div>
           <div class="hint" style="margin-top:4px">${esc(mach?.location || '')}${mach?.location ? ' · ' : ''}${esc(modeLabel(cur.cfg.mode))} · ${cur.cfg.navg} prom.</div>
           ${cur.notes ? `<p class="note" style="color:var(--fg)">${esc(cur.notes)}</p>` : ''}
-          ${it?.status === 'done' && thisMeas ? `<div style="margin-top:12px">${deltaHtml(thisMeas, prevMeas)}</div>
+          ${it?.status === 'done' && thisMeas ? `${alBox(evalAlarm(thisMeas.overall, cur, mach))}<div style="margin-top:12px">${deltaHtml(thisMeas, prevMeas)}</div>
               <div class="row" style="margin-top:12px"><button class="sm" type="button" onclick="location.hash='#/m/${thisMeas.id}'">Ver medida</button>${!finished ? '<button class="sm" id="bRedo">Repetir</button>' : ''}</div>`
             : it?.status === 'skip' ? `<p class="note">Saltado: <b>${esc(it.reason)}</b>${it.comment ? ' · ' + esc(it.comment) : ''}</p>${!finished ? '<button class="sm" id="bRedo">Medir ahora</button>' : ''}` : ''}
           ${!it && !finished ? `
@@ -1519,7 +1733,7 @@ async function vRound(id) {
           <h3>Recorrido</h3>
           <div class="list">${pts.map((pt, i) => {
             const m = machines.find(x => x.id === pt.machineId), x = items[pt.id];
-            const icon = x?.status === 'done' ? '<span style="color:var(--ok);font-weight:800">✓</span>' : x?.status === 'skip' ? '<span style="color:var(--warn);font-weight:800">⤼</span>' : `<b>${i+1}</b>`;
+            const icon = x?.status === 'done' ? `<span style="color:var(${ALCOL[Math.max(0, x.alarm ?? 0)]});font-weight:800">${(x.alarm ?? 0) === 2 ? '⛔' : (x.alarm ?? 0) === 1 ? '⚠' : '✓'}</span>` : x?.status === 'skip' ? '<span style="color:var(--warn);font-weight:800">⤼</span>' : `<b>${i+1}</b>`;
             return `<div class="item" data-go="${pt.id}" style="${pt.id === curId ? 'border-color:var(--acc);' : ''}padding:10px 12px"><span style="width:22px;text-align:center">${icon}</span>
               <div class="m"><div class="t" style="font-size:14px">${esc(m?.name || '')} › ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
               ${x?.status === 'done' ? `<div class="d">${fmt(x.vmax)} mm/s máx.${x.change != null ? ` · <span style="color:var(${x.change >= 50 ? '--err' : x.change >= 25 ? '--warn' : '--ok'})">${x.change >= 0 ? '+' : ''}${Math.round(x.change)} %</span>` : ''}</div>` : x?.status === 'skip' ? `<div class="d">Saltado: ${esc(x.reason)}</div>` : ''}</div></div>`;
@@ -1567,7 +1781,7 @@ async function vRound(id) {
     if (!meas) return;
     cur.orient = orient; await DB.put('points', cur); await refreshPointLast(cur.id);
     const vmax = maxV(meas.overall), pv = maxV(prevMeas?.overall);
-    items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null };
+    items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null, alarm: evalAlarm(meas.overall, cur, mach).level };
     await DB.put('rounds', rd);
     roundCursor[rd.id] = cur.id;   // quedarse en el punto para ver el resultado
     route(); window.scrollTo(0, 0);
@@ -2027,7 +2241,10 @@ function synth(fs, f1, a1, a2, seed) {
 async function makeSample() {
   const p = { id: uid(), created: nowIso(), name: 'Buque de ejemplo', code: 'IMO 0000000', notes: 'Datos sintéticos para probar la app' };
   await DB.put('plants', p);
-  const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, iso: 1, notes: '' };
+  const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, iso: 1, notes: '',
+    kin: [{ id: uid(), type: 'ind', name: 'Motor', poles: 4, fl: 50, bars: 28, slots: 36, ratio: 1 },
+          { id: uid(), type: 'bearing', name: 'Rodamiento 6309 LA', n: 8, bd: 17.46, pd: 72.5, ang: 0, ratio: 1 },
+          { id: uid(), type: 'blades', name: 'Rodete', z: 6, ratio: 1 }] };
   await DB.put('machines', m);
   const pts = [
     { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado acoplamiento', code: 'M1', cfg: { mode: 1, navg: 2, win: 1 }, orient: { z: 'V', x: 'H' } },
@@ -2054,6 +2271,10 @@ async function makeSample() {
   await DB.put('rounds', { id: uid(), routeId: rt.id, started: new Date(Date.now() - 34*864e5).toISOString(), finished: new Date(Date.now() - 34*864e5 + 3600e3).toISOString(),
     items: { [pts[0].id]: { status: 'done', when: nowIso() }, [pts[1].id]: { status: 'done', when: nowIso() }, [p3.id]: { status: 'skip', reason: 'Máquina parada', when: nowIso() } } });
   for (const pt of await DB.all('points')) await refreshPointLast(pt.id);
+  for (const pt of pts) {   // la primera medida como referencia
+    const first = (await DB.by('measurements', 'pointId', pt.id)).sort(byWhen).pop();
+    if (first) { const x = await DB.get('points', pt.id); x.alarm = { ref: { id: first.id, when: first.when, rpm: first.rpm, load: first.load, overall: first.overall } }; await DB.put('points', x); }
+  }
   log('Datos de ejemplo creados', 'ok');
 }
 
