@@ -198,6 +198,8 @@ const G = 9.80665, N_TIME = 4096;
 const MODES = [512,1024,2048,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248];
 const DIRS = ['H','V','A'], DNAME = { H: 'Horizontal', V: 'Vertical', A: 'Axial' }, DCOL = { H: '--dH', V: '--dV', A: '--dA' };
 const SAX = ['X','Y','Z'];
+const DIRSETS = [['HVA','H + V + A (3 ejes)'],['HV','H + V'],['HA','H + A'],['VA','V + A'],['H','Solo H'],['V','Solo V'],['A','Solo A']];
+const dirsTxt = ds => (ds || 'HVA').split('').join('+');
 const ISO = [[0.71,1.8,4.5],[1.12,2.8,7.1],[1.8,4.5,11.2],[2.8,7.1,18]];
 const ISO_NAME = ['I · pequeña (<15 kW)','II · media (15–75 kW)','III · grande, base rígida','IV · grande, base flexible'];
 const ZCOL = ['--zA','--zB','--zC','--zD'];
@@ -237,7 +239,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.7';
+const APP_VERSION = '3.8';
 const DB = {
   db: null,
   open() {
@@ -1095,6 +1097,7 @@ const pointFields = (pt, locked) => [
   { k: 'mode', label: 'Rango de medida', type: 'select', options: MODES.map((_, m) => [m, modeLabel(m)]), def: 1, disabled: locked, hint: locked ? 'Bloqueado: el punto ya tiene medidas' : 'Fijo para todas las medidas del punto' },
   { k: 'navg', label: 'Promedios', type: 'select', options: [[1,'1'],[2,'2'],[4,'4'],[8,'8']], def: 2, disabled: locked },
   { k: 'win', label: 'Ventana FFT', type: 'select', options: [[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']], def: 1, disabled: locked },
+  { k: 'dirs', label: 'Direcciones a medir', type: 'select', options: DIRSETS, def: 'HVA', hint: 'Cada dirección añade unos 18 s a la medida. Se puede cambiar aunque haya medidas.' },
   { k: 'notes', label: 'Notas', type: 'textarea' }];
 async function vMachine(id) {
   const m = await DB.get('machines', id); if (!m) { location.hash = '#/'; return; }
@@ -1123,7 +1126,7 @@ async function vMachine(id) {
     const v = await formDialog('Nuevo punto', pointFields(null, false), { mode: pref.get('lastMode', 1), navg: 2, win: 1 });
     if (!v) return;
     const pt = { id: uid(), machineId: id, created: nowIso(), name: v.name, code: v.code, notes: v.notes,
-                 cfg: { mode: +v.mode, navg: +v.navg, win: +v.win }, orient: { ...orientDefault } };
+                 cfg: { mode: +v.mode, navg: +v.navg, win: +v.win, dirs: v.dirs || 'HVA' }, orient: { ...orientDefault } };
     pref.set('lastMode', +v.mode);
     await DB.put('points', pt); location.hash = '#/p/' + pt.id;
   };
@@ -1149,7 +1152,7 @@ async function vPoint(id) {
   const estS = estMeasure(cfg);
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
-      <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
+      <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} · ${dirsTxt(cfg.dirs)} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
       <span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
@@ -1163,7 +1166,7 @@ async function vPoint(id) {
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
           <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
           <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
-          <p class="note">Tiempo estimado ~${estS} s: se miden los 3 ejes uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
+          <p class="note">Tiempo estimado ~${estS} s: se mide${(cfg.dirs || 'HVA').length > 1 ? 'n' : ''} ${dirsTxt(cfg.dirs)} uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
         </div>
       </div>
       <div class="col">
@@ -1228,6 +1231,7 @@ async function vPoint(id) {
     if (!v) return;
     pt.name = v.name; pt.code = v.code; pt.notes = v.notes;
     if (!locked) pt.cfg = { mode: +v.mode, navg: +v.navg, win: +v.win };
+    pt.cfg.dirs = v.dirs || 'HVA';
     await DB.put('points', pt); route();
   };
   // medir
@@ -1257,18 +1261,19 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const om = orientMap(orient), fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
   const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), device: devName(), operator: opName(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
-                 cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
+                 cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win, dirs: cfg.dirs || 'HVA' }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
   const prog = (f, msg) => {   // tolerante a que la pantalla haya cambiado durante la medida
     const P = $('#prog'), I = $('#prog i'), M = $('#pmsg');
     if (P) P.style.display = f == null ? 'none' : 'block';
     if (I && f != null) I.style.width = (100*f).toFixed(1) + '%';
     if (M && msg != null) M.textContent = msg;
   };
-  const total = 3*cfg.navg; let step = 0; const timing = {}, tStart = performance.now();
+  const want = cfg.dirs || 'HVA', axes = SAX.filter(ax => want.includes(om[ax]));
+  const total = axes.length*cfg.navg; let step = 0; const timing = {}, tStart = performance.now();
   busy = true; setChip();
   try {
     try { const st = await Sensor.status(); meas.sensor.temp = st.temp; meas.sensor.battery = st.battery; } catch (e) {}
-    for (let r = 0; r < cfg.navg; r++) for (const ax of SAX) {
+    for (let r = 0; r < cfg.navg; r++) for (const ax of axes) {
       const d = om[ax], tag = `${DNAME[d]} (${ax})${cfg.navg > 1 ? ` · ${r+1}/${cfg.navg}` : ''}`;
       const cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
         onStage: st => prog(step/total, `${tag}: ${st}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
@@ -1304,7 +1309,7 @@ const TNAME = { config: 'configuración', grabacion: 'grabación', corte: 'corte
 const fmtTiming = t => Object.keys(TNAME).filter(k => t[k] != null).map(k => `${TNAME[k]} ${t[k].toFixed(1)} s`).join(' · ') + (t.total ? ` · total ${t.total.toFixed(1)} s` : '');
 /* Tiempo estimado de una medida con la última experiencia real */
 function estMeasure(cfg) {
-  const lt = pref.get('lastTiming', null), acq = 4096/MODES[cfg.mode], n = 3*cfg.navg;
+  const lt = pref.get('lastTiming', null), acq = 4096/MODES[cfg.mode], n = (cfg.dirs || 'HVA').length*cfg.navg;
   if (lt?.ejes) { const over = (lt.total - (lt.grabacion || 0))/lt.ejes; return Math.round(n*(acq + 0.3 + over)); }
   return Math.round(n*(acq + (pref.get('quiet', true) ? 8 : 5)));
 }
@@ -1356,6 +1361,7 @@ async function vFree() {
           <label class="field"><span>Rango</span><select id="fMode">${MODES.map((_, m) => `<option value="${m}" ${m === c.mode ? 'selected' : ''}>${modeLabel(m)}</option>`).join('')}</select></label>
           <div class="row" style="margin-top:10px">
             <label class="field"><span>Promedios</span><select id="fNavg">${[1,2,4,8].map(n => `<option ${n === c.navg ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span>Direcciones</span><select id="fDirs">${DIRSETS.map(([v, n]) => `<option value="${v}" ${v === (c.dirs || 'HVA') ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span>Ventana</span><select id="fWin">${[[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']].map(([v, n]) => `<option value="${v}" ${v === c.win ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span>Clase ISO</span><select id="fIso">${ISO_NAME.map((n, i) => `<option value="${i}" ${i === cls ? 'selected' : ''}>${['I','II','III','IV'][i]}</option>`).join('')}</select></label>
           </div>
@@ -1384,10 +1390,10 @@ async function vFree() {
     </div>`;
   bindOrient(o);
   const saveCfg = () => {
-    pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value });
+    pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value, dirs: $('#fDirs').value });
     pref.set('freeIso', +$('#fIso').value);
   };
-  for (const id of ['#fMode','#fNavg','#fWin','#fIso']) $(id).onchange = saveCfg;
+  for (const id of ['#fMode','#fNavg','#fWin','#fIso','#fDirs']) $(id).onchange = saveCfg;
   if ($('#bClrAll')) $('#bClrAll').onclick = async () => {
     if (!confirmDel(`las ${loose.length} medidas libres de la bandeja`)) return;
     for (const x of loose) await DB.del('measurements', x.id);
@@ -1485,7 +1491,7 @@ async function saveToPoint(ms) {
       if (pid === '__new') { const p = { id: uid(), created: nowIso(), name: $('#sPlantName').value.trim(), code: '', notes: '' }; await DB.put('plants', p); pid = p.id; }
       if (mid === '__new') { const m = { id: uid(), plantId: pid, created: nowIso(), name: $('#sMachName').value.trim(), type: $('#sMachType').value, location: '', rpm: +$('#sMachRpm').value, kw: null, iso: +$('#sMachIso').value, notes: '' }; await DB.put('machines', m); mid = m.id; }
       if (ptid === '__new') {
-        const pt = { id: uid(), machineId: mid, created: nowIso(), name: $('#sPtName').value.trim(), code: $('#sPtCode').value.trim(), notes: '', cfg: { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win }, orient: ms.orient };
+        const pt = { id: uid(), machineId: mid, created: nowIso(), name: $('#sPtName').value.trim(), code: $('#sPtCode').value.trim(), notes: '', cfg: { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win, dirs: ms.cfg.dirs || 'HVA' }, orient: ms.orient };
         await DB.put('points', pt); ptid = pt.id;
       } else {
         const pt = await DB.get('points', ptid);
@@ -1861,7 +1867,7 @@ async function vRound(id) {
           <h3>Punto ${pts.indexOf(cur)+1} de ${pts.length}<span class="sp"></span>${it ? (it.status === 'done' ? '<span class="tag" style="color:var(--ok)">✓ medido</span>' : '<span class="tag" style="color:var(--warn)">saltado</span>') : ''}</h3>
           <div style="font-size:19px;font-weight:700;line-height:1.25">${esc(mach?.name || '')}</div>
           <div style="font-size:16px;margin-top:2px">${cur.code ? '<b>' + esc(cur.code) + '</b> · ' : ''}${esc(cur.name)}</div>
-          <div class="hint" style="margin-top:4px">${esc(mach?.location || '')}${mach?.location ? ' · ' : ''}${esc(modeLabel(cur.cfg.mode))} · ${cur.cfg.navg} prom.</div>
+          <div class="hint" style="margin-top:4px">${esc(mach?.location || '')}${mach?.location ? ' · ' : ''}${esc(modeLabel(cur.cfg.mode))} · ${cur.cfg.navg} prom. · <b>${dirsTxt(cur.cfg.dirs)}</b></div>
           ${cur.notes ? `<p class="note" style="color:var(--fg)">${esc(cur.notes)}</p>` : ''}
           ${it?.status === 'done' && thisMeas ? `${alBox(evalAlarm(thisMeas.overall, cur, mach))}<div style="margin-top:12px">${deltaHtml(thisMeas, prevMeas)}</div>
               <div class="row" style="margin-top:12px"><button class="sm" type="button" onclick="location.hash='#/m/${thisMeas.id}'">Ver medida</button>${!finished ? '<button class="sm" id="bRedo">Repetir</button>' : ''}</div>`
