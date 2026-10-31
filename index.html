@@ -245,7 +245,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.0';
+const APP_VERSION = '4.1';
 const DB = {
   db: null,
   open() {
@@ -1093,12 +1093,26 @@ async function vPlant(id) {
 }
 
 /* ---------------- Máquina ---------------- */
-const orientDefault = { z: 'V', x: 'H' };
-function orientMap(o) {   // eje del sensor → dirección
-  const rest = DIRS.filter(d => d !== o.z && d !== o.x);
-  return { X: o.x, Y: rest[0], Z: o.z };
+/* Orientación del sensor: ubicación (lado libre, intermedio, lado acoplado), Z con signo y X con signo.
+   Ejes de la máquina: +A hacia el lado acoplado (derecha en el dibujo), +V arriba, +H hacia el observador. Y = Z × X. */
+const POSN = { NDE: 'Lado libre', MID: 'Intermedio', DE: 'Lado acoplado' };
+const orientDefault = { pos: 'DE', z: '+V', x: '+H' };
+const DVEC = { A: [1,0,0], V: [0,1,0], H: [0,0,1] };
+const svec = sd => DVEC[sd[1]].map(v => sd[0] === '-' ? -v : v);
+const vsd = v => { for (const d of DIRS) { const k = v[0]*DVEC[d][0] + v[1]*DVEC[d][1] + v[2]*DVEC[d][2]; if (k > .5) return '+' + d; if (k < -.5) return '-' + d; } return '+H'; };
+const xprod = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+function normOrient(o) {
+  o = { ...(o || {}) };
+  if (o.z && o.z.length === 1) o.z = '+' + o.z;
+  if (o.x && o.x.length === 1) o.x = '+' + o.x;
+  o.z ||= '+V'; o.pos ||= 'DE';
+  if (!o.x || o.x[1] === o.z[1]) o.x = ['+H','+A','+V'].find(x => x[1] !== o.z[1]);
+  return o;
 }
-const orientText = o => { const m = orientMap(o); return SAX.map(a => `${a}→${m[a]}`).join(' · '); };
+function orientSigned(o) { o = normOrient(o); return { X: o.x, Y: vsd(xprod(svec(o.z), svec(o.x))), Z: o.z }; }
+function orientMap(o) { const sg = orientSigned(o); return { X: sg.X[1], Y: sg.Y[1], Z: sg.Z[1] }; }
+const sgn = sd => (sd[0] === '-' ? '−' : '+') + sd[1];
+const orientText = o => { const n = normOrient(o), sg = orientSigned(n); return `${POSN[n.pos]} · ` + SAX.map(a => `${a}→${sgn(sg[a])}`).join(' · '); };
 const pointFields = (pt, locked) => [
   { k: 'name', label: 'Nombre del punto', req: true, ph: 'p. ej. Motor lado acoplamiento' },
   { k: 'code', label: 'Código', ph: 'p. ej. M1, B2' },
@@ -1171,6 +1185,7 @@ async function vPoint(id) {
             <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${lastLoad}" placeholder="0–100"></label>
           </div>
           ${orientHTML(o)}
+          <div class="row adm" style="margin-top:8px"><button class="sm" id="bFixPos">📌 Fijar esta posición en el punto</button>${o?.fixed ? '<button class="sm" id="bUnfixPos">Quitar fijación</button>' : ''}</div>
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
           <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
           <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
@@ -1201,6 +1216,8 @@ async function vPoint(id) {
       </div>
     </div>`;
   bindOrient(o);
+  $('#bFixPos').onclick = async () => { pt.orient = { ...readOrient(), fixed: true }; await DB.put('points', pt); log('Posición del sensor fijada en ' + pt.name, 'ok'); route(); };
+  if ($('#bUnfixPos')) $('#bUnfixPos').onclick = async () => { pt.orient = { ...readOrient() }; delete pt.orient.fixed; await DB.put('points', pt); route(); };
   $$('tr.clk').forEach(tr => tr.onclick = () => location.hash = '#/m/' + tr.dataset.id);
   // tendencia
   const tr = new Plot($('#cvTr'), { xtime: true, ylab: 'mm/s RMS', yunit: 'mm/s', zeroBase: true, empty: 'La tendencia aparecerá con las medidas',
@@ -1248,79 +1265,90 @@ async function vPoint(id) {
 }
 
 /* ---------- Posición del sensor con dibujo ---------- */
-const MOUNT = { V: 'Arriba', H: 'Lateral', A: 'Testero' };
+const AXC = { X: '#8b3fd9', Y: '#b7791f', Z: 'var(--fg)' };   // colores fijos de los ejes locales del sensor
+const AXN = { X: 'violeta', Y: 'ocre', Z: 'gris' };
+let curOrient = normOrient(orientDefault);
+const readOrient = () => ({ ...curOrient });
 function orientHTML(o) {
-  return `<div class="field" style="margin-top:12px"><span>Posición del sensor</span>
+  const mk = (id, c) => `<marker id="${id}" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" style="fill:${c}"/></marker>`;
+  return `<div class="field" style="margin-top:12px"><span>Posición del sensor${o?.fixed ? ' <span class="tag" style="color:var(--acc2)">📌 fijada por la oficina</span>' : ''}</span>
     <div class="ow">
       <svg id="owM" viewBox="0 0 340 190" aria-label="Máquina y posición del sensor">
-        <!-- ejes de la máquina -->
+        <defs>${mk('mkX', AXC.X)}${mk('mkY', AXC.Y)}${mk('mkZ', AXC.Z)}${DIRS.map(d => mk('mk' + d, `var(${DCOL[d]})`)).join('')}</defs>
         <g>
-          <line x1="22" y1="44" x2="22" y2="12" style="stroke:var(--dV);stroke-width:2.5" marker-end="url(#arV)"/>
-          <line x1="22" y1="44" x2="58" y2="44" style="stroke:var(--dA);stroke-width:2.5" marker-end="url(#arA)"/>
+          <line x1="22" y1="44" x2="22" y2="14" style="stroke:var(--dV);stroke-width:2.5" marker-end="url(#mkV)"/>
+          <line x1="22" y1="44" x2="56" y2="44" style="stroke:var(--dA);stroke-width:2.5" marker-end="url(#mkA)"/>
           <circle cx="22" cy="44" r="6" style="fill:none;stroke:var(--dH);stroke-width:2.5"/><circle cx="22" cy="44" r="2" style="fill:var(--dH)"/>
-          <text x="28" y="16" style="fill:var(--dV)">V</text><text x="61" y="48" style="fill:var(--dA)">A</text><text x="4" y="62" style="fill:var(--dH)">H</text>
-          <text x="4" y="74" style="fill:var(--muted);font-weight:400;font-size:9.5px">H hacia ti</text>
+          <text x="28" y="18" style="fill:var(--dV)">+V</text><text x="58" y="48" style="fill:var(--dA)">+A</text><text x="2" y="64" style="fill:var(--dH)">+H</text>
+          <text x="2" y="75" style="fill:var(--muted);font-weight:400;font-size:9px">hacia ti</text>
         </g>
-        <defs>
-          <marker id="arV" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:var(--dV)"/></marker>
-          <marker id="arA" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:var(--dA)"/></marker>
-          <marker id="arH" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:var(--dH)"/></marker>
-        </defs>
-        <!-- bancada -->
         <rect x="24" y="164" width="300" height="12" rx="2" style="fill:var(--muted);opacity:.45"/>
-        <!-- motor -->
         <rect x="70" y="148" width="18" height="16" style="fill:var(--muted);opacity:.6"/><rect x="160" y="148" width="18" height="16" style="fill:var(--muted);opacity:.6"/>
         <rect x="56" y="88" width="14" height="52" rx="3" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
         <rect x="68" y="72" width="118" height="80" rx="10" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
         ${Array.from({ length: 8 }, (_, i) => `<line x1="${82 + i*13}" y1="76" x2="${82 + i*13}" y2="148" style="stroke:var(--line);stroke-width:1.5"/>`).join('')}
         <rect x="108" y="58" width="38" height="15" rx="2" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
         <rect x="186" y="90" width="18" height="48" rx="3" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
-        <text x="110" y="118" style="fill:var(--muted);font-weight:400;font-size:11px">MOTOR</text>
-        <!-- eje y acoplamiento -->
         <rect x="204" y="108" width="36" height="8" style="fill:var(--muted);opacity:.7"/>
         <rect x="226" y="99" width="16" height="26" rx="2" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
-        <!-- bomba -->
         <rect x="262" y="58" width="22" height="22" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
         <circle cx="282" cy="112" r="34" style="fill:var(--card);stroke:var(--muted);stroke-width:1.5"/>
         <circle cx="282" cy="112" r="12" style="fill:none;stroke:var(--line);stroke-width:1.5"/>
         <rect x="262" y="146" width="40" height="18" style="fill:var(--muted);opacity:.6"/>
-        <text x="266" y="186" style="fill:var(--muted);font-weight:400;font-size:11px">BOMBA</text>
+        <text x="40" y="186" style="fill:var(--muted);font-weight:400;font-size:10px">LADO LIBRE</text>
+        <text x="160" y="186" style="fill:var(--muted);font-weight:400;font-size:10px">LADO ACOPLADO</text>
+        ${['NDE','MID','DE'].map(k => `<g class="hit" data-pos="${k}"><circle class="ring" cx="${OW_X[k]}" cy="114" r="14" style="fill:transparent;stroke:var(--line);stroke-dasharray:3 3"/></g>`).join('')}
         <g id="owGlyph"></g>
-        <!-- zonas para tocar -->
-        <g class="hit" data-z="V"><circle class="ring" cx="195" cy="78" r="15" style="fill:transparent;stroke:var(--line);stroke-dasharray:3 3"/></g>
-        <g class="hit" data-z="H"><circle class="ring" cx="195" cy="114" r="15" style="fill:transparent;stroke:var(--line);stroke-dasharray:3 3"/></g>
-        <g class="hit" data-z="A"><circle class="ring" cx="44" cy="114" r="15" style="fill:transparent;stroke:var(--line);stroke-dasharray:3 3"/></g>
       </svg>
       <svg id="owS" viewBox="0 0 220 200" aria-label="Ejes del sensor"></svg>
     </div>
-    <div class="row" style="margin-top:8px;align-items:center">
-      <div class="seg" id="oZseg" style="flex:1 1 220px">${['V','H','A'].map(d => `<button type="button" data-z="${d}" style="--c:var(${DCOL[d]})">${MOUNT[d]}</button>`).join('')}</div>
-      <button type="button" class="sm" id="oRot">↻ Girar 90°</button>
-    </div>
-    <select id="oZ" hidden>${DIRS.map(d => `<option value="${d}" ${o.z === d ? 'selected' : ''}>${d}</option>`).join('')}</select>
-    <select id="oX" hidden></select>
+    <div class="field" style="margin-top:8px"><small>Ubicación</small>
+      <div class="seg" id="oPos">${Object.entries(POSN).map(([k, n]) => `<button type="button" data-pos="${k}">${n}</button>`).join('')}</div></div>
+    <div class="field" style="margin-top:8px"><small>Eje Z del sensor (perpendicular a la base) apunta hacia</small>
+      <div class="seg" id="oZseg">${['+V','-V','+H','-H','+A','-A'].map(z => `<button type="button" data-z="${z}" style="--c:var(${DCOL[z[1]]});padding:8px 0">${{ '+V': '↑', '-V': '↓', '+H': '⊙', '-H': '⊗', '+A': '→', '-A': '←' }[z]} ${sgn(z)}</button>`).join('')}</div></div>
+    <div class="row" style="margin-top:8px;align-items:center"><button type="button" class="sm" id="oRot">↻ Girar 90° sobre Z</button><span class="hint" id="oRotTxt"></span></div>
     <div class="omap" id="oMap"></div></div>`;
 }
+const OW_X = { NDE: 63, MID: 127, DE: 195 };
+const OW_TOP = { NDE: 88, MID: 72, DE: 90 }, OW_BOT = { NDE: 140, MID: 152, DE: 138 };
+const OW_AX = { NDE: { '+A': 70, '-A': 56 }, MID: { '+A': 147, '-A': 107 }, DE: { '+A': 204, '-A': 186 } };
+/* vector 2D (svg) de una dirección con signo; null si es ±H (perpendicular al dibujo) */
+const v2 = sd => sd[1] === 'A' ? [sd[0] === '-' ? -1 : 1, 0] : sd[1] === 'V' ? [0, sd[0] === '-' ? 1 : -1] : null;
 function bindOrient(o) {
-  let z = o.z || 'V', x = o.x || DIRS.find(d => d !== z);
-  const col = d => `var(${DCOL[d]})`;
-  const glyph = () => {
-    // sensor dibujado sobre la máquina según hacia dónde apunta Z
-    const g = $('#owGlyph'); if (!g) return;
-    const body = 'fill:#fbfbfa;stroke:#8a929c;stroke-width:1.4', hex = 'fill:#b9bfc6;stroke:#7b838d;stroke-width:1.2';
-    if (z === 'V') g.innerHTML = `<rect x="186" y="84" width="18" height="6" rx="1" style="${hex}"/><rect x="188" y="66" width="14" height="19" rx="5" style="${body}"/>
-      <line x1="195" y1="62" x2="195" y2="36" style="stroke:${col('V')};stroke-width:2.5" marker-end="url(#arV)"/><text x="200" y="44" style="fill:${col('V')}">Z</text>`;
-    else if (z === 'H') g.innerHTML = `<circle cx="195" cy="114" r="10" style="${hex}"/><circle cx="195" cy="114" r="7" style="${body}"/>
-      <circle cx="195" cy="114" r="2.2" style="fill:${col('H')}"/><text x="210" y="102" style="fill:${col('H')}">Z ⊙</text>`;
-    else g.innerHTML = `<rect x="50" y="105" width="6" height="18" rx="1" style="${hex}"/><rect x="31" y="107" width="19" height="14" rx="5" style="${body}"/>
-      <line x1="29" y1="114" x2="8" y2="114" style="stroke:${col('A')};stroke-width:2.5" marker-end="url(#arA)"/><text x="10" y="106" style="fill:${col('A')}">Z</text>`;
-  };
-  const closeup = () => {
-    const om = orientMap({ z, x }), S = $('#owS'); if (!S) return;
-    const hx = (cx, cy, rx, ry) => Array.from({ length: 6 }, (_, i) => { const a = Math.PI/6 + i*Math.PI/3; return `${(cx + rx*Math.cos(a)).toFixed(1)},${(cy + ry*Math.sin(a)).toFixed(1)}`; }).join(' ');
-    const lab = (ax, x0, y0, anchor='start') => `<text x="${x0}" y="${y0}" text-anchor="${anchor}" style="fill:${col(om[ax])}">${ax} = ${DNAME[om[ax]]}</text>`;
-    S.innerHTML = `
-      <defs>${DIRS.map(d => `<marker id="sar${d}" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:${col(d)}"/></marker>`).join('')}
+  curOrient = normOrient(o);
+  const draw = () => {
+    const c = curOrient, sg = orientSigned(c), G = $('#owGlyph'); if (!G) return;
+    const body = 'fill:#fbfbfa;stroke:#8a929c;stroke-width:1.3', hex = 'fill:#b9bfc6;stroke:#7b838d;stroke-width:1.1';
+    const axArrow = (ax, x0, y0, len) => {   // eje local en el dibujo de la máquina
+      const sd = sg[ax], u = v2(sd);
+      if (!u) return `<g><circle cx="${x0}" cy="${y0}" r="6.5" style="fill:var(--card);stroke:${AXC[ax]};stroke-width:2.2"/>${sd[0] === '+' ? `<circle cx="${x0}" cy="${y0}" r="2.3" style="fill:${AXC[ax]}"/>` : `<path d="M${x0-4},${y0-4} L${x0+4},${y0+4} M${x0+4},${y0-4} L${x0-4},${y0+4}" style="stroke:${AXC[ax]};stroke-width:1.8"/>`}<text x="${x0+9}" y="${y0-8}" style="fill:${AXC[ax]};font-size:12px">${ax}</text></g>`;
+      const x1 = x0 + u[0]*len, y1 = y0 + u[1]*len;
+      return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" style="stroke:${AXC[ax]};stroke-width:2.4" marker-end="url(#mk${ax})"/><text x="${x1 + (u[0] ? u[0]*5 : 5)}" y="${y1 + (u[1] ? u[1]*6 + 4 : -5)}" text-anchor="${u[0] < 0 ? 'end' : 'start'}" style="fill:${AXC[ax]};font-size:12px">${ax}</text>`;
+    };
+    let html = '';
+    const zu = v2(c.z);
+    if (zu) {
+      // montaje en cara superior/inferior/axial: cuerpo del sensor a lo largo de Z
+      const ang = zu[1] === -1 ? 0 : zu[0] === 1 ? 90 : zu[1] === 1 ? 180 : 270;
+      const ax = c.z[1] === 'V' ? OW_X[c.pos] : OW_AX[c.pos][c.z];
+      const ay = c.z[1] === 'V' ? (c.z[0] === '+' ? OW_TOP[c.pos] : OW_BOT[c.pos]) : 114;
+      const cx = ax + zu[0]*15, cy = ay + zu[1]*15;
+      html += `<g transform="translate(${ax},${ay}) rotate(${ang})"><rect x="-11" y="-5" width="22" height="5" rx="1" style="${hex}"/><rect x="-8" y="-28" width="16" height="23" rx="5" style="${body}"/></g>`;
+      html += axArrow('Z', ax + zu[0]*29, ay + zu[1]*29, 22);
+      html += axArrow('X', cx, cy, 30) + axArrow('Y', cx, cy, 30);
+    } else {
+      // montaje en cara frontal (+H, visto de frente) o trasera (−H, oculto)
+      const cx = OW_X[c.pos], cy = 114, back = c.z[0] === '-';
+      html += `<circle cx="${cx}" cy="${cy}" r="13" style="${hex};${back ? 'opacity:.45;stroke-dasharray:3 2' : ''}"/><circle cx="${cx}" cy="${cy}" r="9" style="${body};${back ? 'opacity:.45' : ''}"/>`;
+      html += axArrow('Z', cx, cy, 0) + axArrow('X', cx, cy, 32) + axArrow('Y', cx, cy, 32);
+    }
+    G.innerHTML = html;
+    $$('#owM .hit .ring').forEach(r => { const on = r.parentNode.dataset.pos === c.pos; r.style.stroke = on ? 'var(--acc)' : 'var(--line)'; r.style.strokeDasharray = on ? '' : '3 3'; });
+    // detalle del sensor (siempre en la misma pose; colores fijos por eje local)
+    const S = $('#owS');
+    const hx = (x0, y0, rx, ry) => Array.from({ length: 6 }, (_, i) => { const a = Math.PI/6 + i*Math.PI/3; return `${(x0 + rx*Math.cos(a)).toFixed(1)},${(y0 + ry*Math.sin(a)).toFixed(1)}`; }).join(' ');
+    const lab = (ax, x0, y0, anchor='start') => `<text x="${x0}" y="${y0}" text-anchor="${anchor}"><tspan style="fill:${AXC[ax]}">${ax}</tspan><tspan style="fill:var(--muted)"> → </tspan><tspan style="fill:var(${DCOL[sg[ax][1]]})">${sgn(sg[ax])} ${DNAME[sg[ax][1]]}</tspan></text>`;
+    S.innerHTML = `<defs>${['X','Y','Z'].map(a => `<marker id="sk${a}" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:${AXC[a]}"/></marker>`).join('')}
         <linearGradient id="gBody" x1="0" x2="1"><stop offset="0" stop-color="#e9ebee"/><stop offset=".45" stop-color="#ffffff"/><stop offset="1" stop-color="#d4d8dd"/></linearGradient>
         <linearGradient id="gHex" x1="0" x2="1"><stop offset="0" stop-color="#9aa1aa"/><stop offset=".5" stop-color="#d7dbe0"/><stop offset="1" stop-color="#8b929b"/></linearGradient></defs>
       <polygon points="${hx(110, 162, 52, 15)}" style="fill:#7f868f"/>
@@ -1329,25 +1357,22 @@ function bindOrient(o) {
       <path d="M78,150 L78,82 A32,10 0 0 1 142,82 L142,150 A32,10 0 0 1 78,150 z" style="fill:url(#gBody);stroke:#8a929c;stroke-width:1.3"/>
       <ellipse cx="110" cy="82" rx="32" ry="10" style="fill:#f7f8f9;stroke:#8a929c;stroke-width:1.3"/>
       <rect x="104" y="128" width="12" height="7" rx="2" style="fill:#f0a35a;opacity:.85"/>
-      <path d="M96,154 l16,0 m-5,-3 l5,3 l-5,3" style="stroke:#59616b;stroke-width:1.4;fill:none"/>
-      <line x1="110" y1="68" x2="110" y2="18" style="stroke:${col(om.Z)};stroke-width:3" marker-end="url(#sar${om.Z})"/>
-      <line x1="164" y1="156" x2="210" y2="156" style="stroke:${col(om.X)};stroke-width:3" marker-end="url(#sar${om.X})"/>
-      <line x1="72" y1="140" x2="40" y2="118" style="stroke:${col(om.Y)};stroke-width:3" marker-end="url(#sar${om.Y})"/>
-      ${lab('Z', 118, 26)}${lab('X', 214, 178, 'end')}${lab('Y', 6, 110)}`;
+      <path d="M96,154 l16,0 m-5,-3 l5,3 l-5,3" style="stroke:${AXC.X};stroke-width:1.6;fill:none"/>
+      <line x1="110" y1="68" x2="110" y2="20" style="stroke:${AXC.Z};stroke-width:3" marker-end="url(#skZ)"/>
+      <line x1="164" y1="156" x2="208" y2="156" style="stroke:${AXC.X};stroke-width:3" marker-end="url(#skX)"/>
+      <line x1="72" y1="140" x2="40" y2="118" style="stroke:${AXC.Y};stroke-width:3" marker-end="url(#skY)"/>
+      ${lab('Z', 118, 28)}${lab('X', 214, 182, 'end')}${lab('Y', 4, 108)}`;
+    // botones
+    $$('#oPos button').forEach(b => b.classList.toggle('on', b.dataset.pos === c.pos));
+    $$('#oZseg button').forEach(b => b.classList.toggle('on', b.dataset.z === c.z));
+    $('#oRotTxt').innerHTML = `X apunta a <b style="color:var(${DCOL[sg.X[1]]})">${sgn(sg.X)}</b>, Y a <b style="color:var(${DCOL[sg.Y[1]]})">${sgn(sg.Y)}</b>`;
+    $('#oMap').innerHTML = `<b>${POSN[c.pos]}</b> · ` + SAX.map(a => `<span style="color:${AXC[a]};font-weight:700">${a}</span>→<b style="color:var(${DCOL[sg[a][1]]})">${sgn(sg[a])}</b>`).join(' · ')
+      + '<br><span class="hint">Colores fijos del sensor: X violeta · Y ocre · Z gris. Direcciones de la máquina: H rojo · V azul · A verde. La flecha X está grabada en la base hexagonal.</span>';
   };
-  const sync = () => {
-    if (x === z) x = DIRS.find(d => d !== z);
-    $('#oZ').value = z;
-    $('#oX').innerHTML = DIRS.filter(d => d !== z).map(d => `<option value="${d}" ${d === x ? 'selected' : ''}>${d}</option>`).join('');
-    $$('#oZseg button').forEach(b => b.classList.toggle('on', b.dataset.z === z));
-    $$('#owM .hit .ring').forEach(r => { const on = r.parentNode.dataset.z === z; r.style.stroke = on ? 'var(--acc)' : 'var(--line)'; r.style.strokeDasharray = on ? '' : '3 3'; });
-    glyph(); closeup();
-    const om = orientMap({ z, x });
-    $('#oMap').innerHTML = `${MOUNT[z]}: ` + SAX.map(a => `${a} → <b style="color:var(${DCOL[om[a]]})">${DNAME[om[a]]}</b>`).join(' · ') + '<br><span class="hint">La flecha X está grabada en la base hexagonal del sensor.</span>';
-  };
-  $$('#oZseg button, #owM .hit').forEach(b => b.onclick = () => { z = b.dataset.z; sync(); });
-  $('#oRot').onclick = () => { const r = DIRS.filter(d => d !== z); x = r[(r.indexOf(x) + 1) % r.length]; sync(); };
-  sync();
+  $$('#oPos button, #owM .hit').forEach(b => b.onclick = () => { curOrient.pos = b.dataset.pos; draw(); });
+  $$('#oZseg button').forEach(b => b.onclick = () => { curOrient = normOrient({ ...curOrient, z: b.dataset.z, x: curOrient.x[1] === b.dataset.z[1] ? null : curOrient.x }); draw(); });
+  $('#oRot').onclick = () => { curOrient.x = vsd(xprod(svec(curOrient.z), svec(curOrient.x))); draw(); };   // +90° sobre Z: X pasa a ser la antigua Y
+  draw();
 }
 /* Mide los 3 ejes con la configuración dada y guarda la medida (pointId null = medida libre) */
 async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
@@ -1391,10 +1416,11 @@ async function measurePoint(pt, mach) {
   const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
   if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
   if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
-  const orient = { z: $('#oZ').value, x: $('#oX').value };
+  const orient = readOrient();
   const meas = await runMeasure({ cfg: pt.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: pt.id });
   if (!meas) return;
-  pt.orient = orient; await DB.put('points', pt); await refreshPointLast(pt.id);
+  if (!pt.orient?.fixed) pt.orient = orient;
+  await DB.put('points', pt); await refreshPointLast(pt.id);
   location.hash = '#/m/' + meas.id;
 }
 
@@ -1502,7 +1528,7 @@ async function vFree() {
     if (busy || !Sensor.connected()) return;
     saveCfg();
     const rpm = +$('#mRpm').value || null, load = $('#mLoad').value === '' ? null : +$('#mLoad').value;
-    const orient = { z: $('#oZ').value, x: $('#oX').value };
+    const orient = readOrient();
     pref.set('freeOrient', orient); pref.set('freeRpm', rpm);
     const meas = await runMeasure({ cfg: pref.get('freeCfg'), orient, rpm, load, note: $('#mNote').value.trim(), pointId: null });
     if (meas) location.hash = '#/m/' + meas.id;
@@ -2033,10 +2059,11 @@ async function vRound(id) {
     const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
     if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
     if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
-    const orient = { z: $('#oZ').value, x: $('#oX').value };
+    const orient = readOrient();
     const meas = await runMeasure({ cfg: cur.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: cur.id, roundId: rd.id });
     if (!meas) return;
-    cur.orient = orient; await DB.put('points', cur); await refreshPointLast(cur.id);
+    if (!cur.orient?.fixed) cur.orient = orient;
+    await DB.put('points', cur); await refreshPointLast(cur.id);
     const vmax = maxV(meas.overall), pv = maxV(prevMeas?.overall);
     items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null, alarm: evalAlarm(meas.overall, cur, mach).level };
     await DB.put('rounds', rd);
@@ -2654,8 +2681,8 @@ async function makeSample() {
           { id: uid(), type: 'blades', name: 'Rodete', z: 6, ratio: 1 }] };
   await DB.put('machines', m);
   const pts = [
-    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado acoplamiento', code: 'M1', cfg: { mode: 1, navg: 2, win: 1 }, orient: { z: 'V', x: 'H' } },
-    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado libre', code: 'M2', cfg: { mode: 1, navg: 2, win: 1 }, orient: { z: 'V', x: 'H' } }];
+    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado acoplamiento', code: 'M1', cfg: { mode: 1, navg: 2, win: 1 }, orient: { pos: 'DE', z: '+V', x: '+H' } },
+    { id: uid(), machineId: m.id, created: nowIso(), name: 'Motor lado libre', code: 'M2', cfg: { mode: 1, navg: 2, win: 1 }, orient: { pos: 'NDE', z: '+V', x: '+H', fixed: true } }];
   for (const pt of pts) await DB.put('points', pt);
   const fs = MODES[1];
   for (let k = 0; k < 6; k++) {
@@ -2671,7 +2698,7 @@ async function makeSample() {
   }
   const m2 = { id: uid(), plantId: p.id, created: nowIso(), name: 'Ventilador sala de máquinas', type: 'Ventilador', location: 'Cubierta 2, popa', rpm: 1450, kw: 11, iso: 0, notes: '' };
   await DB.put('machines', m2);
-  const p3 = { id: uid(), machineId: m2.id, created: nowIso(), name: 'Motor lado libre', code: 'V1', cfg: { mode: 1, navg: 1, win: 1 }, orient: { z: 'V', x: 'H' } };
+  const p3 = { id: uid(), machineId: m2.id, created: nowIso(), name: 'Motor lado libre', code: 'V1', cfg: { mode: 1, navg: 1, win: 1 }, orient: { pos: 'DE', z: '+V', x: '+H' } };
   await DB.put('points', p3);
   const rt = { id: uid(), plantId: p.id, created: nowIso(), name: 'Cámara de máquinas · mensual', period: 30, description: 'Medir con las máquinas en servicio normal, tras al menos 15 min funcionando.', points: [pts[0].id, pts[1].id, p3.id] };
   await DB.put('routes', rt);
