@@ -245,7 +245,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.1';
+const APP_VERSION = '4.2';
 const DB = {
   db: null,
   open() {
@@ -557,6 +557,27 @@ function orderAmp(f, y, fo, df) {
   let bi = -1; for (let i = i0; i < i1; i++) if (bi < 0 || y[i] > y[bi]) bi = i;
   return bi < 0 ? null : { f: f[bi], y: y[bi] };
 }
+/* Amplitud por banda: energía de las líneas del lóbulo principal ÷ ENBW (exacta aunque la frecuencia caiga entre líneas) */
+const HWIN = { 0: 3, 1: 3, 2: 5 };   // semiancho de banda en líneas: rectangular, Hann, flat-top
+function snapPeak(f, y, fo, df, tolBins) {
+  const i0 = Math.max(1, lb(f, fo - tolBins*df)), i1 = Math.min(y.length - 1, lb(f, fo + tolBins*df) + 1);
+  let bi = -1; for (let i = i0; i < i1; i++) if (bi < 0 || y[i] > y[bi]) bi = i;
+  return bi;
+}
+function refineFreq(f, y, i, df) {   // interpolación parabólica sobre el logaritmo (gaussiana)
+  if (i <= 0 || i >= y.length - 1) return f[i];
+  const a = y[i-1], b = y[i], c = y[i+1];
+  if (a > 0 && b > 0 && c > 0) { const la = Math.log(a), lB = Math.log(b), lc = Math.log(c), den = la - 2*lB + lc; if (den < 0) { const d = 0.5*(la - lc)/den; if (Math.abs(d) <= 0.6) return f[i] + d*df; } }
+  return f[i];
+}
+function bandAmp(sp, y, fo, win, tolFrac=0.01) {
+  if (!(fo > 0)) return null;
+  const tolB = Math.max(2, fo*tolFrac/sp.df), i = snapPeak(sp.f, y, fo, sp.df, tolB); if (i < 0) return null;
+  const hw = HWIN[win] ?? 3; let e = 0;
+  for (let j = Math.max(1, i - hw); j <= Math.min(y.length - 1, i + hw); j++) e += y[j]*y[j];
+  return { f: refineFreq(sp.f, y, i, sp.df), y: Math.sqrt(e/sp.enbw), i };
+}
+
 /* Valores globales de una medida, por dirección */
 function overallOf(meas) {
   const out = {}, fmax = Math.min(1000, meas.cfg.fs/2.56);
@@ -573,14 +594,24 @@ const maxV = ov => { const v = DIRS.map(d => ov?.[d]?.v).filter(x => x != null);
    Gráfico en canvas
    ===================================================================== */
 class Plot {
+  /* Gráfico ligero en canvas.
+     Opciones: logY, logX, zeroBase, xtime, markers (discontinuos), cursors (fijos), hlines, legend [{text,color}].
+     Ratón: arrastre horizontal = zoom X · vertical = zoom Y · recuadro = ambos · clic = onclick(x, y) · doble clic = 1:1 */
   constructor(cv, o) {
-    Object.assign(this, { cv, series: [], markers: [], hlines: [], xr: null, logY: false, zeroBase: false, hover: null, drag: null, m: null, xtime: false, ...o });
-    cv.addEventListener('pointerdown', e => { this.drag = { a: e.offsetX, b: e.offsetX }; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
-    cv.addEventListener('pointermove', e => { this.hover = e.offsetX; if (this.drag) this.drag.b = e.offsetX; this.draw(); });
+    Object.assign(this, { cv, series: [], markers: [], cursors: [], hlines: [], legend: null, xr: null, yr: null, logY: false, logX: false, zeroBase: false, hover: null, drag: null, m: null, xtime: false, ...o });
+    const pos = e => ({ x: e.offsetX, y: e.offsetY });
+    cv.addEventListener('pointerdown', e => { const q = pos(e); this.drag = { ax: q.x, ay: q.y, bx: q.x, by: q.y, touch: e.pointerType === 'touch' }; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
+    cv.addEventListener('pointermove', e => { const q = pos(e); this.hover = q.x; if (this.drag) { this.drag.bx = q.x; this.drag.by = q.y; } this.draw(); });
     cv.addEventListener('pointerup', () => {
       const d = this.drag; this.drag = null;
-      if (d && Math.abs(d.b - d.a) > 8 && this.m) { this.xr = [this.inv(Math.min(d.a, d.b)), this.inv(Math.max(d.a, d.b))]; this.onzoom && this.onzoom(); }
-      else if (d && this.onclick && this.m) this.onclick(this.inv(d.a));
+      if (!d || !this.m) { this.draw(); return; }
+      const dx = Math.abs(d.bx - d.ax), dy = Math.abs(d.by - d.ay);
+      const zx = dx > 8, zy = !d.touch && dy > 12 && (dx < 8 || dy > dx*0.25);
+      if (zx || zy) {
+        if (zx) this.xr = [this.inv(Math.min(d.ax, d.bx)), this.inv(Math.max(d.ax, d.bx))];
+        if (zy) this.yr = [this.invY(Math.max(d.ay, d.by)), this.invY(Math.min(d.ay, d.by))];
+        this.onzoom && this.onzoom();
+      } else if (this.onclick) this.onclick(this.inv(d.ax), this.invY(d.ay));
       this.draw();
     });
     cv.addEventListener('pointercancel', () => { this.drag = null; this.draw(); });
@@ -588,8 +619,16 @@ class Plot {
     cv.addEventListener('dblclick', () => this.reset());
     new ResizeObserver(() => this.draw()).observe(cv);
   }
-  reset() { this.xr = null; this.onzoom && this.onzoom(); this.draw(); }
-  inv(px) { const m = this.m; return m.x0 + (px - m.L)/m.pw*(m.x1 - m.x0); }
+  reset() { this.xr = null; this.yr = null; this.onzoom && this.onzoom(); this.draw(); }
+  inv(px) { const m = this.m, t = (px - m.L)/m.pw; return m.log ? Math.pow(10, m.lx0 + t*(m.lx1 - m.lx0)) : m.x0 + t*(m.x1 - m.x0); }
+  invY(py) { const m = this.m, t = 1 - (py - m.T)/m.ph; return m.ylog ? Math.pow(10, m.lo + t*(m.hi - m.lo)) : m.ymin + t*(m.ymax - m.ymin); }
+  scaleY(k) {   // zoom Y por botones: k < 1 amplía
+    if (!this.m) return;
+    const m = this.m;
+    if (m.ylog) { const top = Math.pow(10, m.hi + Math.log10(k)*1.0), bot = Math.pow(10, m.lo); this.yr = [bot, Math.max(top, bot*10)]; }
+    else { const lo = this.zeroBase ? Math.min(0, m.ymin) : m.ymin; this.yr = [lo, lo + (m.ymax - lo)*k]; }
+    this.onzoom && this.onzoom(); this.draw();
+  }
   vis() { return this.series.filter(s => s.x && s.x.length); }
   range() {
     const v = this.vis(); if (!v.length) return null;
@@ -599,6 +638,11 @@ class Plot {
     return [a, b];
   }
   xticks(x0, x1, pw) {
+    if (this.m?.log) {
+      const out = [], d0 = Math.floor(Math.log10(x0)), d1 = Math.ceil(Math.log10(x1)), few = d1 - d0 <= 1;
+      for (let d = d0; d <= d1; d++) for (const k of (few ? [1,2,3,4,5,6,7,8,9] : [1,2,5])) { const v = k*Math.pow(10, d); if (v >= x0 && v <= x1) out.push([v, fmt(v, 3), k === 1]); }
+      return out;
+    }
     if (!this.xtime) { const st = niceStep(x1 - x0, Math.max(3, pw/80)); const out = []; for (let v = Math.ceil(x0/st)*st; v <= x1; v += st) out.push([v, fmt(Math.abs(v) < st*1e-9 ? 0 : v, 5)]); return out; }
     const steps = [36e5, 6*36e5, 864e5, 7*864e5, 30*864e5, 91*864e5, 365*864e5], n = Math.max(2, pw/90);
     const st = steps.find(s => (x1 - x0)/s <= n) || steps[steps.length-1];
@@ -611,40 +655,48 @@ class Plot {
     if (!W || !H || !cv.isConnected) return;
     if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)) { cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
     const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
-    const css = getComputedStyle(cv), C = n => css.getPropertyValue(n).trim();
+    const css = getComputedStyle(cv), C = n => n.startsWith('#') ? n : css.getPropertyValue(n).trim();
     g.fillStyle = C('--plot'); g.fillRect(0,0,W,H); g.font = '11px system-ui,sans-serif';
     const L = 50, R = 10, T = 10, B = 30, pw = W - L - R, ph = H - T - B;
     const vis = this.vis();
     if (!vis.length) { g.fillStyle = C('--muted'); g.textAlign = 'center'; g.fillText(this.empty || 'Sin datos', W/2, H/2); this.m = null; return; }
     let [x0, x1] = this.range(); if (x1 <= x0) x1 = x0 + 1;
+    const xlog = this.logX && !this.xtime;
+    if (xlog) {   // primer valor positivo
+      let mp = Infinity; for (const s of vis) for (let i = 0; i < s.x.length; i++) if (s.x[i] > 0) { mp = Math.min(mp, s.x[i]); break; }
+      x0 = Math.max(x0, mp); if (x1 <= x0) x1 = x0*10;
+    }
+    const lx0 = xlog ? Math.log10(x0) : 0, lx1 = xlog ? Math.log10(x1) : 1;
     let log = this.logY, ymin = Infinity, ymax = -Infinity;
     const idx = s => [Math.max(0, lb(s.x, x0) - 1), Math.min(s.x.length, lb(s.x, x1) + 1)];
-    for (const s of vis) { const [i0, i1] = idx(s); for (let i = i0; i < i1; i++) { const y = s.y[i]; if (!isFinite(y) || (log && y <= 0)) continue; if (y < ymin) ymin = y; if (y > ymax) ymax = y; } }
-    for (const h of this.hlines) if (h.inRange) { ymax = Math.max(ymax, h.y); ymin = Math.min(ymin, h.y); }
+    if (this.yr) { [ymin, ymax] = this.yr; if (log && ymin <= 0) ymin = ymax*1e-4; }
+    else {
+      for (const s of vis) { const [i0, i1] = idx(s); for (let i = i0; i < i1; i++) { if (xlog && s.x[i] <= 0) continue; const y = s.y[i]; if (!isFinite(y) || (log && y <= 0)) continue; if (y < ymin) ymin = y; if (y > ymax) ymax = y; } }
+      for (const h of this.hlines) if (h.inRange) { ymax = Math.max(ymax, h.y); ymin = Math.min(ymin, h.y); }
+    }
     if (!isFinite(ymin)) { ymin = 0; ymax = 1; log = false; }
     let lo, hi;
-    if (log) { lo = Math.floor(Math.log10(Math.max(ymin, ymax*1e-5))); hi = Math.ceil(Math.log10(ymax)); if (hi <= lo) hi = lo + 1; }
-    else {
+    if (log) { lo = this.yr ? Math.log10(ymin) : Math.floor(Math.log10(Math.max(ymin, ymax*1e-5))); hi = this.yr ? Math.log10(ymax) : Math.ceil(Math.log10(ymax)); if (hi <= lo) hi = lo + 1; }
+    else if (!this.yr) {
       if (this.zeroBase) ymin = Math.min(0, ymin);
       if (ymax === ymin) { ymax += 1; if (!this.zeroBase) ymin -= 1; }
       const p = (ymax - ymin)*0.06; ymax += p; if (!this.zeroBase || ymin < 0) ymin -= p;
     }
-    const X = x => L + (x - x0)/(x1 - x0)*pw;
-    const Y = y => log ? T + ph*(1 - (Math.log10(Math.max(y, Math.pow(10, lo))) - lo)/(hi - lo)) : T + ph*(1 - (y - ymin)/(ymax - ymin));
-    this.m = { L, pw, x0, x1 };
+    const X = xlog ? (x => L + (Math.log10(Math.max(x, x0*1e-3)) - lx0)/(lx1 - lx0)*pw) : (x => L + (x - x0)/(x1 - x0)*pw);
+    const Y = y => log ? T + ph*(1 - (Math.log10(Math.max(y, Math.pow(10, lo - 3))) - lo)/(hi - lo)) : T + ph*(1 - (y - ymin)/(ymax - ymin));
+    this.m = { L, pw, T, ph, x0, x1, log: xlog, lx0, lx1, ylog: log, lo, hi, ymin, ymax };
     g.strokeStyle = C('--grid'); g.fillStyle = C('--muted'); g.lineWidth = 1; g.textAlign = 'right'; g.textBaseline = 'middle';
-    if (log) { const st = hi - lo > 6 ? 2 : 1; for (let e = lo; e <= hi; e += st) { const yy = Y(Math.pow(10, e)); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillText(fmt(Math.pow(10, e), 2), L-6, yy); } }
+    if (log) { const span = hi - lo, st = span > 6 ? 2 : 1; for (let e = Math.ceil(lo); e <= Math.floor(hi); e += st) { const yy = Y(Math.pow(10, e)); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillText(fmt(Math.pow(10, e), 2), L-6, yy); } }
     else { const st = niceStep(ymax - ymin, Math.max(3, ph/42)); for (let v = Math.ceil(ymin/st)*st; v <= ymax; v += st) { const yy = Y(v); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillText(fmt(Math.abs(v) < st*1e-9 ? 0 : v, 4), L-6, yy); } }
     g.textAlign = 'center'; g.textBaseline = 'top';
-    for (const [v, lab] of this.xticks(x0, x1, pw)) { const xx = X(v); g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.fillText(lab, xx, T+ph+5); }
-    if (this.xlab) g.fillText(this.xlab, L + pw/2, H - 12);
+    let lastTick = -1e9;
+    for (const [v, lab, major] of this.xticks(x0, x1, pw)) { const xx = X(v); g.globalAlpha = xlog && !major ? .55 : 1; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); if (xx - lastTick > 26) { g.fillText(lab, xx, T+ph+5); lastTick = xx; } g.globalAlpha = 1; }
+    if (this.xlab) g.fillText(this.xlab + (xlog ? ' · log' : ''), L + pw/2, H - 12);
     g.save(); g.translate(10, T + ph/2); g.rotate(-Math.PI/2); g.textBaseline = 'middle'; g.fillText(this.ylab || '', 0, 0); g.restore();
     g.strokeStyle = C('--line'); g.strokeRect(L, T, pw, ph);
     g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
-    // líneas horizontales (umbrales)
     g.setLineDash([5,4]); g.textAlign = 'right'; g.textBaseline = 'bottom';
     for (const h of this.hlines) { const yy = Y(h.y); if (yy < T || yy > T+ph) continue; g.strokeStyle = C(h.color); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillStyle = C(h.color); g.fillText(h.label, L+pw-4, yy-2); }
-    // marcadores verticales
     g.setLineDash([3,4]); g.textAlign = 'left'; g.textBaseline = 'top';
     let lastLbl = -1e9;
     for (const mk of this.markers) {
@@ -657,17 +709,43 @@ class Plot {
     for (const s of vis) {
       const [i0, i1] = idx(s); g.strokeStyle = C(s.color); g.lineWidth = s.width || 1.3; g.setLineDash(s.dash || []); g.beginPath();
       const yv = y => isFinite(y) ? y : (log ? 0 : ymin);
+      let started = false;
       if (i1 - i0 > pw*2) {
-        let px = null, mn = 0, mx = 0, first = true;
-        const flush = () => { if (px == null) return; if (first) { g.moveTo(px, Y(mn)); first = false; } else g.lineTo(px, Y(mn)); g.lineTo(px, Y(mx)); };
-        for (let i = i0; i < i1; i++) { const p = Math.floor(X(s.x[i])), y = yv(s.y[i]); if (p !== px) { flush(); px = p; mn = mx = y; } else { if (y < mn) mn = y; if (y > mx) mx = y; } }
+        let px = null, mn = 0, mx = 0;
+        const flush = () => { if (px == null) return; if (!started) { g.moveTo(px, Y(mn)); started = true; } else g.lineTo(px, Y(mn)); g.lineTo(px, Y(mx)); };
+        for (let i = i0; i < i1; i++) { if (xlog && s.x[i] <= 0) continue; const p = Math.floor(X(s.x[i])), y = yv(s.y[i]); if (p !== px) { flush(); px = p; mn = mx = y; } else { if (y < mn) mn = y; if (y > mx) mx = y; } }
         flush();
-      } else for (let i = i0; i < i1; i++) { const y = yv(s.y[i]); i === i0 ? g.moveTo(X(s.x[i]), Y(y)) : g.lineTo(X(s.x[i]), Y(y)); }
+      } else for (let i = i0; i < i1; i++) { if (xlog && s.x[i] <= 0) continue; const y = yv(s.y[i]); if (!started) { g.moveTo(X(s.x[i]), Y(y)); started = true; } else g.lineTo(X(s.x[i]), Y(y)); }
       g.stroke(); g.setLineDash([]);
       if (s.dots) { g.fillStyle = C(s.color); for (let i = i0; i < i1; i++) { g.beginPath(); g.arc(X(s.x[i]), Y(yv(s.y[i])), 3.5, 0, 7); g.fill(); } }
     }
-    if (this.drag && Math.abs(this.drag.b - this.drag.a) > 2) { g.fillStyle = 'rgba(31,111,209,.15)'; g.fillRect(Math.min(this.drag.a, this.drag.b), T, Math.abs(this.drag.b - this.drag.a), ph); }
+    // cursores fijos
+    for (const c of this.cursors) {
+      if (c.x < x0 || c.x > x1) continue; const xx = X(c.x);
+      g.strokeStyle = C(c.color || '--fg'); g.lineWidth = c.main ? 1.6 : 1; g.globalAlpha = c.main ? 1 : .6; g.setLineDash(c.main ? [] : [2,2]);
+      g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+      if (c.label) { g.fillStyle = C(c.color || '--fg'); g.font = c.main ? 'bold 11px system-ui,sans-serif' : '10px system-ui,sans-serif'; g.textAlign = 'left'; g.textBaseline = 'bottom'; g.fillText(c.label, xx + 3, T + ph - 3); g.font = '11px system-ui,sans-serif'; }
+    }
+    g.lineWidth = 1;
+    if (this.drag) {
+      const d = this.drag, dx = Math.abs(d.bx - d.ax), dy = Math.abs(d.by - d.ay), zx = dx > 2, zy = !d.touch && dy > 6 && (dx < 8 || dy > dx*0.25);
+      if (zx || zy) {
+        g.fillStyle = 'rgba(31,111,209,.15)';
+        const rx = zx ? Math.min(d.ax, d.bx) : L, rw = zx ? dx : pw, ry = zy ? Math.min(d.ay, d.by) : T, rh = zy ? dy : ph;
+        g.fillRect(rx, ry, rw, rh);
+      }
+    }
     g.restore();
+    // leyenda
+    if (this.legend?.length) {
+      g.font = '11.5px system-ui,sans-serif';
+      const lw = Math.max(...this.legend.map(l => g.measureText(l.text).width)) + 26, lh = this.legend.length*16 + 8;
+      const lx = L + pw - lw - 6, ly = T + 6;
+      g.globalAlpha = .92; g.fillStyle = C('--card'); g.fillRect(lx, ly, lw, lh); g.globalAlpha = 1; g.strokeStyle = C('--line'); g.strokeRect(lx, ly, lw, lh);
+      g.textAlign = 'left'; g.textBaseline = 'top';
+      this.legend.forEach((l, k) => { g.fillStyle = C(l.color || '--fg'); g.fillRect(lx + 8, ly + 9 + k*16, 10, 3); g.fillStyle = C('--fg'); g.fillText(l.text, lx + 22, ly + 4 + k*16); });
+      g.font = '11px system-ui,sans-serif';
+    }
     if (this.hover != null && !this.drag && this.hover >= L && this.hover <= L + pw) {
       const xv = this.inv(this.hover);
       g.strokeStyle = C('--muted'); g.beginPath(); g.moveTo(this.hover, T); g.lineTo(this.hover, T+ph); g.stroke();
@@ -683,9 +761,10 @@ class Plot {
       g.font = '12px system-ui,sans-serif';
       const bw = Math.max(...lines.map(l => g.measureText(l[0]).width)) + 16, bh = lines.length*16 + 8;
       let bx = this.hover + 10; if (bx + bw > L + pw) bx = this.hover - bw - 10;
-      g.fillStyle = C('--card'); g.strokeStyle = C('--line'); g.fillRect(bx, T+6, bw, bh); g.strokeRect(bx, T+6, bw, bh);
+      const by = this.legend?.length ? T + 12 + this.legend.length*16 + 8 : T + 6;
+      g.fillStyle = C('--card'); g.strokeStyle = C('--line'); g.fillRect(bx, by, bw, bh); g.strokeRect(bx, by, bw, bh);
       g.textAlign = 'left'; g.textBaseline = 'top';
-      lines.forEach((l, k) => { g.fillStyle = C(l[1] === '--fg' ? '--fg' : l[1]); g.fillText(l[0], bx + 8, T + 10 + k*16); });
+      lines.forEach((l, k) => { g.fillStyle = C(l[1] === '--fg' ? '--fg' : l[1]); g.fillText(l[0], bx + 8, by + 4 + k*16); });
     }
   }
 }
@@ -1673,7 +1752,7 @@ async function vMeas(id) {
         </div>
         ${kf.length ? `<div class="card">
           <h3>Frecuencias de fallo</h3><div class="tw"><table id="tKin"></table></div>
-          <p class="note">Amplitud máxima en ±1 % (mín. 2 líneas) alrededor de cada frecuencia. Toca una fila para ampliar el espectro allí.</p>
+          <p class="note">Amplitud por banda: energía de ±${HWIN[ms.cfg.win ?? 1]} líneas alrededor del pico (buscado en ±1 %) dividida por el ENBW de la ventana ${WIN_NAME[ms.cfg.win ?? 1]}. Toca una fila para ampliar el espectro allí.</p>
         </div>` : ''}
         <div class="card">
           <h3>Picos principales</h3><div class="tw"><table id="tPk"></table></div>
@@ -1692,15 +1771,19 @@ async function vMeas(id) {
       </div>
       <div class="col">
         <div class="card">
-          <h3>Espectro<span class="sp"></span><button class="sm" data-z="10">0–10×</button><button class="sm" data-z="all">Todo</button></h3>
+          <h3>Espectro<span class="sp"></span><button class="sm" data-z="10">0–10×</button><button class="sm" id="yIn" title="Ampliar eje Y">Y ×2</button><button class="sm" id="yOut" title="Reducir eje Y">Y ÷2</button><button class="sm" data-z="all">1:1</button></h3>
           <div class="row" style="margin-bottom:8px">
             <label class="field"><span>Unidades</span><select id="unit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option><option value="gpk">Aceleración g pico</option></select></label>
-            <label class="field" style="flex:0 0 auto"><span>Escala</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Eje Y</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Eje X</span><select id="xscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Cursor</span><select id="cmode"><option value="simple">Simple</option><option value="harm">Armónicos</option></select></label>
+            <label class="field" style="flex:0 0 70px" id="wNh"><span>Nº arm.</span><input type="number" id="cnh" min="2" max="40" value="10"></label>
             <label class="field" style="flex:0 0 auto"><span>Marcadores</span><select id="mk"><option value="ord">Armónicos 1×</option>${kf.length ? '<option value="kin">Cinemática</option><option value="both">Ambos</option>' : ''}<option value="none">Ninguno</option></select></label>
             <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)}${s.rpm ? ' · ' + fmt(s.rpm, 5) + ' rpm' : ''}${s.load != null ? ' · ' + fmt(s.load, 3) + ' %' : ''}${s.note ? ' · ' + esc(s.note) : ''}</option>`).join('')}</select></label>
           </div>
-          <canvas id="cvS"></canvas>
+          <canvas id="cvS" style="height:300px"></canvas>
           <div class="hint" id="sInfo"></div>
+          <div id="curBox"></div>
         </div>
         <div class="card">
           <h3>Señal temporal<span class="sp"></span><span class="hint" id="tInfo"></span></h3>
@@ -1709,6 +1792,10 @@ async function vMeas(id) {
       </div>
     </div>`;
   $('#unit').value = mvState.unit; $('#yscale').value = mvState.yscale; $('#ref').value = mvState.ref; $('#mk').value = mvState.mk;
+  mvState.xscale ||= 'lin'; mvState.cmode ||= 'simple'; mvState.cnh ||= 10;
+  if (mvState.curFor !== ms.id) { mvState.cur = null; mvState.curFor = ms.id; }
+  $('#xscale').value = mvState.xscale; $('#cmode').value = mvState.cmode; $('#cnh').value = mvState.cnh; $('#wNh').style.display = mvState.cmode === 'harm' ? '' : 'none';
+  const win = ms.cfg.win ?? 1;
   if (!free) $('#alm').innerHTML = alBox(evalAlarm(ms.overall, pt, m), 'Sin alarmas: todos los valores dentro de los límites del punto');
   const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => f1 ? `  · ${(f/f1).toFixed(2)}×` : '' });
   const plotT = new Plot($('#cvT'), { xlab: 'Tiempo (s)', ylab: 'g', yunit: 'g', xfmt: x => fmt(x, 5) + ' s' });
@@ -1716,14 +1803,15 @@ async function vMeas(id) {
   const render = () => {
     const d = mvState.dir, sp = getSpec(ms, d), unit = mvState.unit, ov = ms.overall?.[d] || overallOf(ms)[d];
     const y = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], unit));
-    const a1 = f1 ? orderAmp(sp.f, Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), f1, sp.df) : null;
+    const yv = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms'));
+    const a1 = f1 ? bandAmp(sp, yv, f1, win) : null;
     $('#kpis').innerHTML = `
       <div class="kpi"><div class="l">Velocidad global</div><div class="v">${fmt(ov.v)}<small>mm/s</small></div><div class="s">${zoneTag(ov.v, cls)} 10–${fmt(Math.min(1000, fmax), 4)} Hz</div></div>
       <div class="kpi"><div class="l">Aceleración RMS</div><div class="v">${fmt(ov.arms)}<small>g</small></div><div class="s">${fmt(ov.arms*G, 3)} m/s²</div></div>
       <div class="kpi"><div class="l">Aceleración pico</div><div class="v">${fmt(ov.apk)}<small>g</small></div><div class="s">Factor de cresta ${fmt(ov.cf, 2)}</div></div>
-      <div class="kpi"><div class="l">1×${f1 ? ' · ' + fmt(f1, 4) + ' Hz' : ''}</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'pico en ' + fmt(a1.f, 4) + ' Hz' : 'sin rpm'}</div></div>`;
+      <div class="kpi"><div class="l">1×${f1 ? ' · ' + fmt(f1, 4) + ' Hz' : ''}</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'en ' + fmt(a1.f, 4) + ' Hz · por banda' : 'sin rpm'}</div></div>`;
     plotS.ylab = UNIT[unit]; plotS.yunit = unit === 'vrms' ? 'mm/s' : 'g';
-    plotS.logY = mvState.yscale === 'log'; plotS.zeroBase = !plotS.logY;
+    plotS.logY = mvState.yscale === 'log'; plotS.zeroBase = !plotS.logY; plotS.logX = mvState.xscale === 'log';
     plotS.series = [{ name: refMeas ? fday(ms.when) : '', x: sp.f, y, color: DCOL[d] }];
     if (refMeas && refMeas.dirs[d]?.length) {
       const rs = getSpec(refMeas, d);
@@ -1736,17 +1824,60 @@ async function vMeas(id) {
     ].sort((a, b) => a.x - b.x);
     if (kf.length && $('#tKin')) {
       $('#tKin').innerHTML = `<tr><th>Componente</th><th>Frecuencia</th><th>Hz</th><th>${UNIT[unit]}</th></tr>` + kf.filter(x => x.main).map(x => {
-        const a = orderAmp(sp.f, y, x.hz, sp.df);
+        const a = bandAmp(sp, y, x.hz, win);
         return `<tr class="clk" data-hz="${x.hz}"><td style="white-space:normal"><span class="dot" style="background:var(${x.color})"></span>${esc(x.comp)}</td><td>${esc(x.label)}</td><td>${fmt(x.hz, 4)}</td><td>${a ? fmt(a.y) : '–'}</td></tr>`;
       }).join('');
       $$('#tKin tr[data-hz]').forEach(tr => tr.onclick = () => { const hz = +tr.dataset.hz; plotS.xr = [Math.max(0, hz*0.8 - 5*sp.df), Math.min(fmax, hz*1.2 + 5*sp.df)]; render(); });
     }
+    // cursores
+    const cf = mvState.cur;
+    plotS.cursors = cf ? [{ x: cf, label: fmt(cf, 5) + ' Hz', main: true },
+      ...(mvState.cmode === 'harm' ? Array.from({ length: mvState.cnh - 1 }, (_, k) => ({ x: cf*(k+2), label: (k+2) + '×' })) : [])] : [];
+    // leyenda: nivel global y nivel de la banda visible (se recalcula con el zoom)
+    const [vx0, vx1] = plotS.range() || [0, fmax], bx0 = Math.max(vx0, sp.f[1]), bx1 = Math.min(vx1, fmax);
+    const velU = unit === 'vrms', uR = velU ? 'mm/s' : 'g RMS';
+    plotS.legend = [
+      { text: `${DNAME[d]} · global 10–${fmt(Math.min(1000, fmax), 4)} Hz: ${fmt(ov.v)} mm/s`, color: DCOL[d] },
+      { text: `Banda ${fmt(bx0, 4)}–${fmt(bx1, 4)} Hz: ${fmt(bandRms(sp, bx0, bx1, velU))} ${uR}`, color: DCOL[d] },
+      ...(refMeas?.dirs[d]?.length ? [{ text: `Ref. ${fday(refMeas.when)} · banda: ${fmt(bandRms(getSpec(refMeas, d), bx0, bx1, velU))} ${uR}`, color: '--ref' }] : [])];
     plotS.draw();
-    $('#sInfo').textContent = `Δf ${fmt(sp.df, 3)} Hz${refMeas ? ' · en gris discontinuo: ' + fdate(refMeas.when) + (refMeas.cfg.mode !== ms.cfg.mode ? ' (otro rango)' : '') : ''} · arrastra para ampliar, doble clic para volver`;
+    $('#sInfo').textContent = `Δf ${fmt(sp.df, 3)} Hz${refMeas ? ' · en gris discontinuo: ' + fdate(refMeas.when) + (refMeas.cfg.mode !== ms.cfg.mode ? ' (otro rango)' : '') : ''} · arrastra en horizontal (zoom X), en vertical (zoom Y) o en recuadro · clic = cursor · doble clic = 1:1`;
+    // panel del cursor
+    if (cf) {
+      const ca = bandAmp(sp, y, cf, win, 0), ord = f1 ? cf/f1 : null;
+      const mults = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12];
+      const harmRows = mvState.cmode === 'harm' ? Array.from({ length: mvState.cnh }, (_, k) => { const fk = cf*(k+1); if (fk >= fmax) return ''; const a = bandAmp(sp, y, fk, win); return `<tr><td>${k+1}×</td><td>${a ? fmt(a.f, 5) : '–'}</td><td>${a ? fmt(a.y) : '–'}</td></tr>`; }).join('') : '';
+      $('#curBox').innerHTML = `<div class="card" style="margin-top:10px;padding:10px 12px;background:var(--bg)">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline"><b>Cursor ${fmt(cf, 5)} Hz</b><span>${fmt(cf*60, 5)} cpm</span>
+          <span>${ca ? fmt(ca.y) + ' ' + UNIT[unit] + ' <span class="hint">(banda)</span>' : ''}</span>${ord ? `<span>${ord.toFixed(3)}× de 1×</span>` : ''}
+          <span class="sp" style="flex:1"></span><button class="sm" id="curClr">Quitar cursor</button></div>
+        ${harmRows ? `<div class="tw" style="margin-top:6px"><table><tr><th>Armónico</th><th>Hz</th><th>${UNIT[unit]}</th></tr>${harmRows}</table></div>` : ''}
+        <div class="row" style="margin-top:10px;align-items:center">
+          <span>Velocidad = cursor ÷</span>
+          <select id="spDiv" style="width:auto">${mults.map(k => `<option value="${k}" ${k === 1 ? 'selected' : ''}>${String(k).replace('.', ',')}</option>`).join('')}<option value="x">otro…</option></select>
+          <b id="spRpm"></b>
+          <button class="sm pri" id="spSave">Usar como velocidad</button>
+        </div>
+        ${!free ? `<label class="chk adm" style="margin-top:8px"><input type="checkbox" id="spMach"> Guardar también como velocidad nominal de la máquina (${m.rpm} rpm)</label>` : ''}
+      </div>`;
+      let div = 1;
+      const upd = () => { $('#spRpm').textContent = `${fmt(cf/div*60, 5)} rpm`; };
+      $('#spDiv').onchange = () => { if ($('#spDiv').value === 'x') { const v = parseFloat(String(prompt('Divisor (p. ej. 36 ranuras, 7 álabes…)', '1') || '1').replace(',', '.')); div = v > 0 ? v : 1; } else div = +$('#spDiv').value; upd(); };
+      upd();
+      $('#curClr').onclick = () => { mvState.cur = null; render(); };
+      $('#spSave').onclick = async () => {
+        const rpm = +(cf/div*60).toFixed(1);
+        if (!confirm(`¿Guardar ${rpm} rpm como velocidad de esta medida? Se recalcularán los órdenes y la cinemática.`)) return;
+        ms.rpm = rpm; await DB.put('measurements', ms, false);
+        if (!free) { await refreshPointLast(pt.id); if ($('#spMach')?.checked) { m.rpm = Math.round(rpm); await DB.put('machines', m); } }
+        log(`Velocidad de la medida fijada en ${rpm} rpm (cursor ${fmt(cf, 5)} Hz ÷ ${div})`, 'ok');
+        route();
+      };
+    } else $('#curBox').innerHTML = '<p class="hint" style="margin:6px 0 0">Haz clic en el espectro para fijar un cursor (se ajusta al pico más cercano).</p>';
     // órdenes
     const ords = f1 ? [0.5,1,2,3,4,5,6].filter(k => k*f1 < fmax) : [];
-    const vals = ords.map(k => orderAmp(sp.f, y, k*f1, sp.df)), A1 = vals[ords.indexOf(1)]?.y;
-    let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = refMeas.rpm ? ords.map(k => orderAmp(rs.f, ry, k*(refMeas.rpm/60), rs.df)) : null; }
+    const vals = ords.map(k => bandAmp(sp, y, k*f1, win)), A1 = vals[ords.indexOf(1)]?.y;
+    let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = refMeas.rpm ? ords.map(k => bandAmp(rs, ry, k*(refMeas.rpm/60), refMeas.cfg.win ?? 1)) : null; }
     $('#tOrd').innerHTML = !f1 ? '<tr><td class="hint" style="text-align:left;white-space:normal">Sin rpm no se pueden calcular los órdenes. Puedes indicarlas al guardar la medida en un punto.</td></tr>' : `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${rvals ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + ords.map((k, j) => {
       const v = vals[j], r = rvals?.[j];
       return `<tr><td>${k}×</td><td>${v ? fmt(v.f, 4) : '–'}</td><td>${v ? fmt(v.y) : '–'}</td>${rvals ? `<td>${r ? fmt(r.y) : '–'}</td><td>${v && r && r.y > 0 ? (v.y >= r.y ? '+' : '') + Math.round(100*(v.y/r.y - 1)) + ' %' : '–'}</td>` : `<td>${v && A1 ? Math.round(100*v.y/A1) + ' %' : '–'}</td>`}</tr>`;
@@ -1754,7 +1885,9 @@ async function vMeas(id) {
     // picos
     const [x0, x1] = plotS.range() || [0, fmax];
     const pk = findPeaks(sp.f, y, Math.max(x0, unit === 'vrms' ? 5 : 2), Math.min(x1, fmax));
-    $('#tPk').innerHTML = `<tr><th>#</th><th>Hz</th><th>${UNIT[unit]}</th><th>Orden</th></tr>` + pk.map((k, j) => `<tr><td>${j+1}</td><td>${fmt(sp.f[k], 4)}</td><td>${fmt(y[k])}</td><td>${f1 ? (sp.f[k]/f1).toFixed(2) + '×' : '–'}</td></tr>`).join('');
+    $('#tPk').innerHTML = `<tr><th>#</th><th>Hz</th><th>${UNIT[unit]}</th><th>Orden</th></tr>` + pk.map((k, j) => { const a = bandAmp(sp, y, sp.f[k], win, 0) || { f: sp.f[k], y: y[k] };
+      return `<tr class="clk" data-pf="${a.f}"><td>${j+1}</td><td>${fmt(a.f, 5)}</td><td>${fmt(a.y)}</td><td>${f1 ? (a.f/f1).toFixed(2) + '×' : '–'}</td></tr>`; }).join('');
+    $$('#tPk tr[data-pf]').forEach(tr => tr.onclick = () => { mvState.cur = +tr.dataset.pf; render(); });
     // tiempo
     const blk = ms.dirs[d], cg = blk[blk.length-1]; let mean = 0; for (const v of cg) mean += v; mean /= cg.length;
     plotT.series = [{ x: Float64Array.from(cg, (_, k) => k/ms.cfg.fs), y: Float64Array.from(cg, v => (v - mean)/100), color: DCOL[d] }];
@@ -1762,6 +1895,16 @@ async function vMeas(id) {
     $('#tInfo').textContent = `${(4096/ms.cfg.fs).toFixed(3)} s · Fs ${ms.cfg.fs} Hz`;
   };
   plotS.onzoom = () => setTimeout(render, 0);
+  plotS.onclick = x => {   // cursor fijo ajustado al pico más cercano (±3 líneas) con interpolación
+    const sp = getSpec(ms, mvState.dir), y = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], mvState.unit));
+    const i = snapPeak(sp.f, y, x, sp.df, 3);
+    mvState.cur = i > 0 ? refineFreq(sp.f, y, i, sp.df) : x; render();
+  };
+  $('#xscale').onchange = () => { mvState.xscale = $('#xscale').value; render(); };
+  $('#cmode').onchange = () => { mvState.cmode = $('#cmode').value; $('#wNh').style.display = mvState.cmode === 'harm' ? '' : 'none'; render(); };
+  $('#cnh').onchange = () => { mvState.cnh = Math.max(2, Math.min(40, +$('#cnh').value || 10)); render(); };
+  $('#yIn').onclick = () => plotS.scaleY(0.5);
+  $('#yOut').onclick = () => plotS.scaleY(2);
   $$('#dSeg button').forEach(b => b.onclick = () => { mvState.dir = b.dataset.d; $$('#dSeg button').forEach(x => x.classList.toggle('on', x === b)); render(); });
   $('#unit').onchange = () => { mvState.unit = $('#unit').value; render(); };
   $('#yscale').onchange = () => { mvState.yscale = $('#yscale').value; render(); };
@@ -1773,7 +1916,7 @@ async function vMeas(id) {
     await DB.put('points', pt); route();
   };
   $('#ref').onchange = async () => { mvState.ref = $('#ref').value; refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null; render(); };
-  $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' && f1 ? [0, Math.min(10.5*f1, fmax)] : null; render(); });
+  $$('[data-z]').forEach(b => b.onclick = () => { plotS.xr = b.dataset.z === '10' && f1 ? [0, Math.min(10.5*f1, fmax)] : null; if (b.dataset.z === 'all') plotS.yr = null; render(); });
   $('#bPrev').onclick = () => prev && (location.hash = '#/m/' + prev.id);
   $('#bNext').onclick = () => next && (location.hash = '#/m/' + next.id);
   $('#bCsv').onclick = () => exportCSV(ms, pt, free ? null : m, p);
