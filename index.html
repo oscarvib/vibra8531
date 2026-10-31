@@ -239,7 +239,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.8';
+const APP_VERSION = '3.9';
 const DB = {
   db: null,
   open() {
@@ -301,7 +301,9 @@ const Sensor = {
   connected() { return !!(this.device && this.device.gatt.connected); },
   async connect() {
     const optionalServices = [...CUSTOM_SVCS.map(U128), 0x180F, 0x181A, 0x180A];
-    this.device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: '85' }], optionalServices });
+    this.device = await navigator.bluetooth.requestDevice(pref.get('scanAll', false)
+      ? { acceptAllDevices: true, optionalServices }
+      : { filters: [{ namePrefix: '85' }], optionalServices });
     this.device.addEventListener('gattserverdisconnected', () => this._onDisc());
     this.manual = false;
     await this.open();
@@ -2382,6 +2384,7 @@ async function vSettings() {
             <span>Temperatura interna</span><span>${st.temp != null ? st.temp.toFixed(1) + ' °C' : '–'}</span><span>Contador</span><span>${st.counter ?? '–'}</span></div>
             <div class="row" style="margin-top:10px"><button class="sm" id="bStat">Actualizar</button></div>`
           : '<p class="note" style="margin-top:0">Sin conectar. Si no aparece al pulsar Conectar, despiértalo con un toque de imán en el icono «U» o sacando y metiendo la pila: anuncia durante 1 h.</p>'}
+          <label class="chk" style="margin-top:10px"><input type="checkbox" id="scanAll" ${pref.get('scanAll', false) ? 'checked' : ''}> Mostrar todos los dispositivos Bluetooth al conectar (diagnóstico)</label>
         </div>
         <div class="card">
           <h3>Velocidad de medida</h3>
@@ -2440,6 +2443,7 @@ async function vSettings() {
   $('#log').replaceChildren(...logBuf.map(e => e.cloneNode(true)));
   if ($('#bStat')) $('#bStat').onclick = async () => { Sensor.lastStatus = await Sensor.status(); route(); };
   $('#quiet').onchange = () => pref.set('quiet', $('#quiet').checked);
+  $('#scanAll').onchange = () => pref.set('scanAll', $('#scanAll').checked);
   $('#devName').onchange = () => pref.set('device', $('#devName').value.trim());
   $('#opName').onchange = () => pref.set('operator', $('#opName').value.trim());
   $$('#modeSeg button').forEach(b => b.onclick = () => {
