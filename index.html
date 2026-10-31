@@ -248,7 +248,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.7';
+const APP_VERSION = '4.8';
 const DB = {
   db: null,
   open() {
@@ -523,7 +523,9 @@ function fft(re) {
   return { r, im };
 }
 /* Espectro de amplitud de pico (g), promedio en potencia de varios bloques en cg, hasta Fs/2,56 */
-function spectrum(blocks, fs, wt) {
+const FCUT_DEF = 2;   // Hz: por debajo, el espectro se pone a cero (el sensor no es fiable ahí y la integración lo dispara)
+const fcutOf = cfg => cfg?.fcut ?? FCUT_DEF;
+function spectrum(blocks, fs, wt, fcut=0) {
   const N = blocks[0].length, w = makeWin(N, wt); let s1 = 0; for (const v of w) s1 += v;
   const nb = Math.floor((fs/2.56) / (fs/N)) + 1, acc = new Float64Array(nb);
   for (const blk of blocks) {
@@ -533,6 +535,7 @@ function spectrum(blocks, fs, wt) {
     for (let k = 0; k < nb; k++) { const a = Math.hypot(r[k], im[k]) * (k ? 2 : 1) / s1; acc[k] += a*a; }
   }
   const gpk = Float64Array.from(acc, v => Math.sqrt(v / blocks.length));
+  for (let k = 0; k < nb && k*fs/N < fcut; k++) gpk[k] = 0;
   return { f: Float64Array.from(gpk, (_, k) => k*fs/N), gpk, enbw: enbw(wt, N), df: fs/N };
 }
 function conv(gpk, f, unit) {
@@ -607,7 +610,7 @@ function overallOf(meas) {
   const out = {}, fmaxAll = meas.cfg.fs/2.56, fmax = Math.min(1000, fmaxAll);
   for (const d of DIRS) {
     const bl = meas.dirs[d]; if (!bl || !bl.length) continue;
-    const sp = spectrum(bl, meas.cfg.fs, meas.cfg.win), ts = timeStats(bl[bl.length-1]);
+    const sp = spectrum(bl, meas.cfg.fs, meas.cfg.win, fcutOf(meas.cfg)), ts = timeStats(bl[bl.length-1]);
     const bands = {};
     for (const [k] of BANDS) {
       const [lo, hi] = bandLims(k), h = Math.min(hi, fmaxAll);
@@ -1375,6 +1378,7 @@ const pointFields = (pt, locked) => [
   { k: 'mode', label: 'Rango de medida', type: 'select', options: MODES.map((_, m) => [m, modeLabel(m)]), def: 1, disabled: locked, hint: locked ? 'Bloqueado: el punto ya tiene medidas' : 'Fijo para todas las medidas del punto' },
   { k: 'navg', label: 'Promedios', type: 'select', options: [[1,'1'],[2,'2'],[4,'4'],[8,'8']], def: 2, disabled: locked },
   { k: 'win', label: 'Ventana FFT', type: 'select', options: [[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']], def: 1, disabled: locked },
+  { k: 'fcut', label: 'Corte inferior del espectro (Hz)', type: 'number', min: 0, max: 50, step: 'any', def: FCUT_DEF, hint: 'Por debajo se pone a cero. Es de procesado: se puede cambiar aunque haya medidas y se recalculan todas las del punto.' },
   { k: 'dirs', label: 'Direcciones a medir', type: 'select', options: DIRSETS, def: 'HVA', hint: 'Cada dirección añade unos 18 s a la medida. Se puede cambiar aunque haya medidas.' },
   { k: 'notes', label: 'Notas', type: 'textarea' }];
 async function vMachine(id) {
@@ -1404,7 +1408,7 @@ async function vMachine(id) {
     const v = await formDialog('Nuevo punto', pointFields(null, false), { mode: pref.get('lastMode', 1), navg: 2, win: 1 });
     if (!v) return;
     const pt = { id: uid(), machineId: id, created: nowIso(), name: v.name, code: v.code, notes: v.notes,
-                 cfg: { mode: +v.mode, navg: +v.navg, win: +v.win, dirs: v.dirs || 'HVA' }, orient: { ...orientDefault } };
+                 cfg: { mode: +v.mode, navg: +v.navg, win: +v.win, dirs: v.dirs || 'HVA', fcut: v.fcut === '' || v.fcut == null ? FCUT_DEF : +v.fcut }, orient: { ...orientDefault } };
     pref.set('lastMode', +v.mode);
     await DB.put('points', pt); location.hash = '#/p/' + pt.id;
   };
@@ -1430,7 +1434,7 @@ async function vPoint(id) {
   const estS = estMeasure(cfg);
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
-      <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} · ${dirsTxt(cfg.dirs)} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
+      <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} · corte ${fmt(fcutOf(cfg), 3)} Hz · ${dirsTxt(cfg.dirs)} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
       <span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
@@ -1509,13 +1513,17 @@ async function vPoint(id) {
   };
   // editar
   $('#bEdit').onclick = async () => {
-    const v = await formDialog('Editar punto', pointFields(pt, locked), { ...pt, ...pt.cfg }, { danger: 'Borrar punto' });
+    const v = await formDialog('Editar punto', pointFields(pt, locked), { ...pt, ...pt.cfg, fcut: fcutOf(pt.cfg) }, { danger: 'Borrar punto' });
     if (v === '__delete') { if (confirmDel(`el punto «${pt.name}» y sus ${ms.length} medidas`)) { await delPointDeep(pt.id); location.hash = '#/q/' + m.id; } return; }
     if (!v) return;
     pt.name = v.name; pt.code = v.code; pt.notes = v.notes;
     if (!locked) pt.cfg = { mode: +v.mode, navg: +v.navg, win: +v.win };
     pt.cfg.dirs = v.dirs || 'HVA';
-    await DB.put('points', pt); route();
+    const fc = v.fcut === '' || v.fcut == null || !(+v.fcut >= 0) ? FCUT_DEF : +v.fcut, oldFc = fcutOf(pt.cfg);
+    pt.cfg.fcut = fc;
+    await DB.put('points', pt);
+    if (fc !== oldFc) await applyFcut(pt.id, fc);
+    route();
   };
   // medir
   setChip();
@@ -1637,7 +1645,7 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const om = orientMap(orient), fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
   const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), device: devName(), operator: opName(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
-                 cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win, dirs: cfg.dirs || 'HVA' }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
+                 cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win, dirs: cfg.dirs || 'HVA', fcut: fcutOf(cfg) }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
   const prog = (f, msg) => {   // tolerante a que la pantalla haya cambiado durante la medida
     const P = $('#prog'), I = $('#prog i'), M = $('#pmsg');
     if (P) P.style.display = f == null ? 'none' : 'block';
@@ -1762,6 +1770,7 @@ async function vFree() {
             <label class="field"><span>Promedios</span><select id="fNavg">${[1,2,4,8].map(n => `<option ${n === c.navg ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span>Direcciones</span><select id="fDirs">${DIRSETS.map(([v, n]) => `<option value="${v}" ${v === (c.dirs || 'HVA') ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span>Ventana</span><select id="fWin">${[[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']].map(([v, n]) => `<option value="${v}" ${v === c.win ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field" style="flex:0 0 90px"><span>Corte (Hz)</span><input type="number" id="fFcut" min="0" max="50" step="any" inputmode="decimal" value="${fcutOf(c)}" title="Por debajo de esta frecuencia el espectro se pone a cero"></label>
             <label class="field"><span>Clase ISO</span><select id="fIso">${ISO_NAME.map((n, i) => `<option value="${i}" ${i === cls ? 'selected' : ''}>${['I','II','III','IV'][i]}</option>`).join('')}</select></label>
           </div>
           <div class="row" style="margin-top:10px">
@@ -1789,10 +1798,10 @@ async function vFree() {
     </div>`;
   bindOrient(o);
   const saveCfg = () => {
-    pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value, dirs: $('#fDirs').value });
+    pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value, dirs: $('#fDirs').value, fcut: $('#fFcut').value === '' ? FCUT_DEF : Math.max(0, +$('#fFcut').value) });
     pref.set('freeIso', +$('#fIso').value);
   };
-  for (const id of ['#fMode','#fNavg','#fWin','#fIso','#fDirs']) $(id).onchange = saveCfg;
+  for (const id of ['#fMode','#fNavg','#fWin','#fIso','#fDirs','#fFcut']) $(id).onchange = saveCfg;
   $$('[data-del]').forEach(b => b.onclick = async e => {
     e.preventDefault(); e.stopPropagation();
     if (!confirm('¿Descartar esta medida libre?')) return;
@@ -1899,10 +1908,12 @@ async function saveToPoint(ms) {
         await DB.put('points', pt); ptid = pt.id;
       } else {
         const pt = await DB.get('points', ptid);
-        if (!nMeas(ptid) && !sameCfg(pt)) { pt.cfg = { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win }; }
+        if (!nMeas(ptid) && !sameCfg(pt)) { pt.cfg = { ...pt.cfg, mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win }; }
         pt.orient = ms.orient; await DB.put('points', pt);
       }
       ms.pointId = ptid; ms.rpm = rpm; ms.load = load;
+      const ptx = await DB.get('points', ptid);   // la medida adopta el corte inferior del punto
+      if (ptx && fcutOf(ptx.cfg) !== fcutOf(ms.cfg)) { ms.cfg.fcut = fcutOf(ptx.cfg); ms.overall = overallOf(ms); }
       await DB.put('measurements', ms, false); await refreshPointLast(ptid);
       log('Medida libre guardada en un punto', 'ok');
       finish(ptid);
@@ -1911,11 +1922,19 @@ async function saveToPoint(ms) {
   });
 }
 
+/* Cambia el corte inferior de todas las medidas de un punto y recalcula sus globales */
+async function applyFcut(pointId, fc) {
+  for (const x of await DB.by('measurements', 'pointId', pointId)) { x.cfg.fcut = fc; x.overall = overallOf(x); await DB.put('measurements', x, false); }
+  await refreshPointLast(pointId);
+  const p2 = await DB.get('points', pointId);
+  if (p2?.alarm?.ref?.id) { const r = await DB.get('measurements', p2.alarm.ref.id); if (r) { p2.alarm.ref.overall = r.overall; await DB.put('points', p2, false); } }
+  log(`Corte inferior ${fmt(fc, 3)} Hz aplicado a las medidas del punto`, 'ok');
+}
 /* ---------------- Medida ---------------- */
 let mvState = { dir: null, ref: '', unit: 'vrms', yscale: 'lin' };
 function getSpec(meas, d) {
-  const k = meas.id + '|' + d;
-  if (!specCache.has(k)) { specCache.set(k, spectrum(meas.dirs[d], meas.cfg.fs, meas.cfg.win)); if (specCache.size > 60) specCache.delete(specCache.keys().next().value); }
+  const k = meas.id + '|' + d + '|' + fcutOf(meas.cfg);
+  if (!specCache.has(k)) { specCache.set(k, spectrum(meas.dirs[d], meas.cfg.fs, meas.cfg.win, fcutOf(meas.cfg))); if (specCache.size > 60) specCache.delete(specCache.keys().next().value); }
   return specCache.get(k);
 }
 async function vMeas(id) {
@@ -1944,7 +1963,7 @@ async function vMeas(id) {
       <div class="seg" id="dSeg">${dirsHere.map(d => `<button data-d="${d}" style="--c:var(${DCOL[d]})" class="${d === mvState.dir ? 'on' : ''}">${DNAME[d]}</button>`).join('')}</div>
       <div id="alm"></div>
       <div class="kpis" id="kpis" style="margin-top:12px"></div>
-      <p class="note">Zonas ISO 10816-1 clase ${['I','II','III','IV'][cls]} (orientativo): A &lt; ${ISO[cls][0]} · B &lt; ${ISO[cls][1]} · C &lt; ${ISO[cls][2]} mm/s. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]}${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
+      <p class="note">Zonas ISO 10816-1 clase ${['I','II','III','IV'][cls]} (orientativo): A &lt; ${ISO[cls][0]} · B &lt; ${ISO[cls][1]} · C &lt; ${ISO[cls][2]} mm/s. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]} · corte ${fmt(fcutOf(ms.cfg), 3)} Hz${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
     </div>
     <div class="grid two">
       <div class="col">
@@ -3116,6 +3135,13 @@ async function xOp(write, read) {
   try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
   if (!pref.get('mode', null)) pref.set('mode', defaultMode());   // se decide una vez y se guarda
   await loadTpls();
+  if (!pref.get('migFcut', false)) {   // corte inferior de 2 Hz en todas las medidas existentes
+    try {
+      for (const pt of await DB.all('points')) if (pt.cfg && pt.cfg.fcut == null) { pt.cfg.fcut = FCUT_DEF; await DB.put('points', pt, false); }
+      pref.set('migBands', false);   // fuerza el recálculo de globales de abajo
+      pref.set('migFcut', true);
+    } catch (e) { console.error(e); }
+  }
   if (!pref.get('migBands', false)) {   // añade las bandas normalizadas a las medidas existentes
     try {
       for (const x of await DB.all('measurements')) { if (x.dirs && Object.keys(x.dirs).length) { x.overall = overallOf(x); await DB.put('measurements', x, false); } }
