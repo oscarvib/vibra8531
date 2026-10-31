@@ -259,7 +259,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.9';
+const APP_VERSION = '5.0';
 const DB = {
   db: null,
   open() {
@@ -1043,7 +1043,16 @@ const tplById = id => allTpls().find(t => t.id === id);
 async function loadTpls() { try { USER_TPLS = (await DB.get('kv', 'alarmTpls'))?.list || []; } catch (e) { USER_TPLS = []; } }
 async function saveTpls() { await DB.put('kv', { id: 'alarmTpls', list: USER_TPLS }, false); }
 /* perfil efectivo: el del punto, si no el de la máquina, si no ISO 10816-1 según la clase de la máquina */
-function tplFor(pt, mach) { return tplById(pt?.alarm?.tpl) || tplById(mach?.alarmTpl) || tplById('iso10816-1-' + ['I','II','III','IV'][mach?.iso ?? 1]); }
+const TPL_DEF = 'iso10816-1-II';
+function tplFor(pt, mach) { return tplById(pt?.alarm?.tpl) || tplById(mach?.alarmTpl) || tplById('iso10816-1-' + ['I','II','III','IV'][mach?.iso ?? 1]) || tplById(TPL_DEF); }
+const tplSelect = () => allTpls().map(t => [t.id, (t.builtin ? '' : '★ ') + t.name]);
+/* etiqueta del valor según el perfil: zonas A–D si es ISO, si no normal / aviso / peligro */
+function profTag(v, t) {
+  if (v == null || !isFinite(v) || !t) return '';
+  if (t.zAB != null) { const z = v < t.zAB ? 0 : v < t.warn ? 1 : v < t.danger ? 2 : 3; return `<span class="zone" style="background:var(${ZCOL[z]})">${'ABCD'[z]}</span>`; }
+  const l = v >= t.danger ? 2 : v >= t.warn ? 1 : 0; return alTag(l);
+}
+const profNote = t => `${esc(t.name)}${t.zAB != null ? ` · A &lt; ${fmt(t.zAB)} · B &lt; ${fmt(t.warn)} · C &lt; ${fmt(t.danger)} mm/s` : ` · aviso ${fmt(t.warn)} · peligro ${fmt(t.danger)} mm/s`} (${(t.band || '10-1000').replace('-', '–')} Hz)`;
 function alarmCfg(pt, mach) {
   const a = pt?.alarm || {}, t = tplFor(pt, mach);
   const pick = k => a[k] ?? t[k];
@@ -1277,7 +1286,7 @@ async function delTpl(t) {
 async function vAlarms() {
   const [ms, ps] = await Promise.all([DB.all('machines'), DB.all('points')]);
   const use = id => ({ m: ms.filter(m => m.alarmTpl === id).length, p: ps.filter(p => p.alarm?.tpl === id).length,
-                       d: id.startsWith('iso10816-1-') ? ms.filter(m => !m.alarmTpl && 'iso10816-1-' + ['I','II','III','IV'][m.iso ?? 1] === id).length : 0 });
+                       d: 0 });
   const card = t => { const u = use(t.id); return `<div class="item" style="cursor:default;align-items:flex-start">
     <div class="m"><div class="t">${t.builtin ? '🔒 ' : ''}${esc(t.name)}</div>
       ${t.desc ? `<div class="d" style="white-space:normal">${esc(t.desc)}</div>` : ''}
@@ -1330,6 +1339,55 @@ async function vPlants() {
   $('#bNew').onclick = nb; if ($('#bNew2')) $('#bNew2').onclick = nb;
 }
 
+/* ---------------- Duplicar máquinas y puntos ---------------- */
+/* copia de un punto sin medidas ni referencia: configuración, posición del sensor y alarmas */
+/* «Bomba de lastre 1» → «Bomba de lastre 2», «M1» → «M2» */
+const bumpName = t => t && /\d+(?!.*\d)/.test(t) ? t.replace(/(\d+)(?!.*\d)/, d => String(+d + 1)) : t;
+/* primer nombre libre: sube el último número hasta no repetir; si no hay número, añade el sufijo */
+function freeName(t, used, suffix) {
+  if (!t) return t;
+  if (!/\d+(?!.*\d)/.test(t)) { let c = t + suffix, k = 2; while (suffix && used.includes(c)) c = `${t}${suffix} ${k++}`; return c; }
+  let c = bumpName(t); for (let i = 0; i < 200 && used.includes(c); i++) c = bumpName(c); return c;
+}
+function clonePoint(pt, machineId, extra={}) {
+  const c = JSON.parse(JSON.stringify(pt));
+  Object.assign(c, { id: uid(), machineId, created: nowIso(), ...extra });
+  delete c.last; if (c.alarm) delete c.alarm.ref;
+  return c;
+}
+async function dupMachine(m, pts) {
+  const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
+  const v = await formDialog('Duplicar máquina', [
+    { k: 'name', label: 'Nombre de la copia', req: true },
+    { k: 'plantId', label: 'En el barco', type: 'select', options: plants.map(p => [p.id, p.name]) },
+    { k: 'location', label: 'Ubicación', ph: 'p. ej. Cámara de máquinas, estribor' },
+    { k: 'pts', label: 'Puntos', type: 'select', options: [['1', `Copiar sus ${pts.length} punto${pts.length === 1 ? '' : 's'} (configuración, posición del sensor y alarmas)`], ['0', 'No copiar puntos']] }],
+    { name: freeName(m.name, (await DB.by('machines', 'plantId', m.plantId)).map(x => x.name), ' (copia)'), plantId: m.plantId, location: m.location || '', pts: pts.length ? '1' : '0' },
+    { okText: 'Duplicar' });
+  if (!v) return;
+  const c = JSON.parse(JSON.stringify(m));
+  Object.assign(c, { id: uid(), plantId: v.plantId, created: nowIso(), name: v.name, location: v.location });
+  await DB.put('machines', c);
+  if (v.pts === '1') for (const pt of pts) await DB.put('points', clonePoint(pt, c.id));
+  log(`Máquina duplicada: «${c.name}»${v.pts === '1' ? ` con ${pts.length} puntos` : ''} (sin medidas)`, 'ok');
+  location.hash = '#/q/' + c.id;
+}
+async function dupPoint(pt, m) {
+  const machines = await DB.all('machines'), plants = await DB.all('plants');
+  const pn = id => plants.find(p => p.id === id)?.name || '';
+  const opts = machines.sort((a, b) => (pn(a.plantId) + a.name).localeCompare(pn(b.plantId) + b.name)).map(x => [x.id, `${pn(x.plantId)} › ${x.name}`]);
+  const sib = await DB.by('points', 'machineId', m.id);
+  const v = await formDialog('Duplicar punto', [
+    { k: 'name', label: 'Nombre de la copia', req: true },
+    { k: 'code', label: 'Código' },
+    { k: 'machineId', label: 'En la máquina', type: 'select', options: opts }],
+    { name: freeName(pt.name, sib.map(x => x.name), ' (copia)'), code: freeName(pt.code || '', sib.map(x => x.code || ''), ''), machineId: m.id }, { okText: 'Duplicar' });
+  if (!v) return;
+  const c = clonePoint(pt, v.machineId, { name: v.name, code: v.code });
+  await DB.put('points', c);
+  log(`Punto duplicado: «${c.name}» (sin medidas)`, 'ok');
+  location.hash = '#/p/' + c.id;
+}
 /* ---------------- Barco ---------------- */
 const machineFields = m => [
   { k: 'name', label: 'Nombre', req: true, ph: 'p. ej. Bomba de lastre 1' },
@@ -1337,8 +1395,7 @@ const machineFields = m => [
   { k: 'location', label: 'Ubicación', ph: 'p. ej. Cámara de máquinas, babor' },
   { k: 'rpm', label: 'Velocidad nominal (rpm)', type: 'number', min: 0, req: true },
   { k: 'kw', label: 'Potencia nominal (kW)', type: 'number', min: 0 },
-  { k: 'iso', label: 'Clase ISO 10816-1', type: 'select', options: ISO_NAME.map((n, i) => [i, n]), def: 1 },
-  { k: 'alarmTpl', label: 'Perfil de alarma de la máquina', type: 'select', options: tplOptions('ISO 10816-1 según la clase de arriba'), def: '', hint: 'Lo heredan sus puntos, salvo que el punto tenga otro' },
+  { k: 'alarmTpl', label: 'Perfil de alarma de la máquina', type: 'select', options: tplSelect(), def: TPL_DEF, hint: 'ISO 10816-1 (clases I–IV), DNV o los tuyos. Lo heredan sus puntos, salvo que el punto tenga otro.' },
   { k: 'notes', label: 'Notas', type: 'textarea' }];
 async function vPlant(id) {
   const p = await DB.get('plants', id); if (!p) { location.hash = '#/bd'; return; }
@@ -1359,7 +1416,7 @@ async function vPlant(id) {
   $('#bNew').onclick = async () => {
     const v = await formDialog('Nueva máquina', machineFields());
     if (!v) return;
-    const m = { id: uid(), plantId: id, created: nowIso(), ...v, iso: +v.iso }; if (!m.alarmTpl) delete m.alarmTpl; await DB.put('machines', m); location.hash = '#/q/' + m.id;
+    const m = { id: uid(), plantId: id, created: nowIso(), ...v }; await DB.put('machines', m); location.hash = '#/q/' + m.id;
   };
 }
 
@@ -1400,7 +1457,7 @@ async function vMachine(id) {
   const last = {};
   for (const pt of pts) { const ms = await DB.by('measurements', 'pointId', pt.id); ms.sort(byWhen); last[pt.id] = { n: ms.length, m: ms[0] }; }
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
-    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/q/${m.id}'">📄 Informe</button><button class="sm adm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ${esc(tplFor(null, m).name)}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/q/${m.id}'">📄 Informe</button><button class="sm adm" id="bDup" title="Crear una copia de la máquina">⧉ Duplicar</button><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri adm" id="bNew">+ Punto</button></div>
     <div class="list">${pts.length ? pts.map(pt => {
       const L = last[pt.id], ov = L.m?.overall;
@@ -1409,12 +1466,13 @@ async function vMachine(id) {
         ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${alTag(evalAlarm(ov, pt, m).level)}</div>` : ''}</div><span class="chev">›</span></a>`;
     }).join('') : '<div class="empty">Crea los puntos donde vas a medir (por ejemplo, cada alojamiento de rodamiento).</div>'}</div>
     ${kinCard(m)}`;
+  $('#bDup').onclick = () => dupMachine(m, pts);
   $('#bKin').onclick = () => editKin(m, null);
   if (!isOp()) $$('[data-ki]').forEach(el => el.onclick = () => editKin(m, +el.dataset.ki));
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar máquina', machineFields(m), m, { danger: 'Borrar máquina' });
     if (v === '__delete') { if (confirmDel(`la máquina «${m.name}» con sus puntos y medidas`)) { await delMachineDeep(m.id); location.hash = '#/b/' + p.id; } return; }
-    if (v) { Object.assign(m, v, { iso: +v.iso }); if (!m.alarmTpl) delete m.alarmTpl; await DB.put('machines', m); route(); }
+    if (v) { Object.assign(m, v); delete m.iso; await DB.put('machines', m); route(); }
   };
   $('#bNew').onclick = async () => {
     const v = await formDialog('Nuevo punto', pointFields(null, false), { mode: pref.get('lastMode', 1), navg: 2, win: 1 });
@@ -1456,7 +1514,7 @@ async function vPoint(id) {
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
       <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} · corte ${fmt(fcutOf(cfg), 3)} Hz · ${dirsTxt(cfg.dirs)} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
-      <span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
+      <span class="sp"></span><button class="sm adm" id="bDup" title="Crear una copia del punto">⧉ Duplicar</button><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
         <div class="card">
@@ -1510,7 +1568,6 @@ async function vPoint(id) {
     const rows = asc.filter(x => x.overall?.[d]);
     return { name: d, x: Float64Array.from(rows, x => Date.parse(x.when)), y: Float64Array.from(rows, x => vBand(x.overall[d], alarmCfg(pt, m).band)), color: DCOL[d], dots: true, width: 2 };
   });
-  const lim = ISO[m.iso ?? 1];
   tr.hlines = [];
   tr.onclick = x => { if (!asc.length) return; let best = asc[0]; for (const r of asc) if (Math.abs(Date.parse(r.when) - x) < Math.abs(Date.parse(best.when) - x)) best = r; location.hash = '#/m/' + best.id; };
   tr.draw();
@@ -1532,6 +1589,7 @@ async function vPoint(id) {
     else { pt.alarm = { ...a }; for (const [k, x] of Object.entries(v)) { if (x == null || x === '') delete pt.alarm[k]; else pt.alarm[k] = x; } }
     await DB.put('points', pt); route();
   };
+  $('#bDup').onclick = () => dupPoint(pt, m);
   // editar
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar punto', pointFields(pt, locked), { ...pt, ...pt.cfg, fcut: fcutOf(pt.cfg) }, { danger: 'Borrar punto' });
@@ -1813,7 +1871,7 @@ async function testSimultaneous() {
 /* ---------------- Medida libre (fuera de ruta) ---------------- */
 async function vFree() {
   const loose = (await DB.all('measurements')).filter(x => !x.pointId).sort(byWhen);
-  const c = pref.get('freeCfg', { mode: 1, navg: 1, win: 1 }), o = pref.get('freeOrient', orientDefault), cls = pref.get('freeIso', 1);
+  const c = pref.get('freeCfg', { mode: 1, navg: 1, win: 1 }), o = pref.get('freeOrient', orientDefault), ftpl = pref.get('freeTpl', TPL_DEF);
   view.innerHTML = `
     <div class="titlebar"><div><h2>Medida libre</h2><div class="sub">Mide sin ruta para explorar. Si interesa, guárdala después en un punto.</div></div></div>
     <div class="grid two">
@@ -1826,7 +1884,7 @@ async function vFree() {
             <label class="field"><span>Direcciones</span><select id="fDirs">${DIRSETS.map(([v, n]) => `<option value="${v}" ${v === (c.dirs || 'HVA') ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span>Ventana</span><select id="fWin">${[[1,'Hann'],[2,'Flat-top'],[0,'Rectangular']].map(([v, n]) => `<option value="${v}" ${v === c.win ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field" style="flex:0 0 90px"><span>Corte (Hz)</span><input type="number" id="fFcut" min="0" max="50" step="any" inputmode="decimal" value="${fcutOf(c)}" title="Por debajo de esta frecuencia el espectro se pone a cero"></label>
-            <label class="field"><span>Clase ISO</span><select id="fIso">${ISO_NAME.map((n, i) => `<option value="${i}" ${i === cls ? 'selected' : ''}>${['I','II','III','IV'][i]}</option>`).join('')}</select></label>
+            <label class="field" style="flex-basis:100%"><span>Perfil de alarma</span><select id="fTpl">${tplSelect().map(([v, n]) => `<option value="${esc(v)}" ${v === ftpl ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
           </div>
           <div class="row" style="margin-top:10px">
             <label class="field"><span>Velocidad (rpm)</span><input type="number" id="mRpm" inputmode="decimal" min="0" step="any" value="${pref.get('freeRpm', '') ?? ''}" placeholder="opcional"></label>
@@ -1872,9 +1930,9 @@ async function vFree() {
   bindOrient(o);
   const saveCfg = () => {
     pref.set('freeCfg', { mode: +$('#fMode').value, navg: +$('#fNavg').value, win: +$('#fWin').value, dirs: $('#fDirs').value, fcut: $('#fFcut').value === '' ? FCUT_DEF : Math.max(0, +$('#fFcut').value) });
-    pref.set('freeIso', +$('#fIso').value);
+    pref.set('freeTpl', $('#fTpl').value);
   };
-  for (const id of ['#fMode','#fNavg','#fWin','#fIso','#fDirs','#fFcut']) $(id).onchange = saveCfg;
+  for (const id of ['#fMode','#fNavg','#fWin','#fTpl','#fDirs','#fFcut']) $(id).onchange = saveCfg;
   $$('[data-del]').forEach(b => b.onclick = async e => {
     e.preventDefault(); e.stopPropagation();
     if (!confirm('¿Descartar esta medida libre?')) return;
@@ -1984,7 +2042,7 @@ async function saveToPoint(ms) {
         <label class="field" style="flex-basis:100%"><span>Nombre de la máquina nueva *</span><input id="sMachName" placeholder="p. ej. Ventilador sala de máquinas"></label>
         <label class="field"><span>Tipo</span><select id="sMachType">${MACH_TYPES.map(t => opt(t, t)).join('')}</select></label>
         <label class="field"><span>rpm nominal *</span><input type="number" id="sMachRpm" step="any" min="1" value="${ms.rpm ?? ''}"></label>
-        <label class="field"><span>Clase ISO</span><select id="sMachIso">${ISO_NAME.map((n, i) => opt(i, n, i === pref.get('freeIso', 1))).join('')}</select></label>
+        <label class="field" style="flex-basis:100%"><span>Perfil de alarma</span><select id="sMachTpl">${tplSelect().map(([v, n]) => opt(v, n, v === pref.get('freeTpl', TPL_DEF))).join('')}</select></label>
       </div>
       <label class="field"><span>Punto</span><select id="sPt"></select><small id="sPtHint"></small></label>
       <div id="wPtNew" hidden class="row">
@@ -2042,7 +2100,7 @@ async function saveToPoint(ms) {
       if (need(rpm > 0, $('#sRpm'), 'Indica las rpm de la medida.')) return;
       if (need(load >= 0 && load <= 150, $('#sLoad'), 'Indica la carga en % (0–100).')) return;
       if (pid === '__new') { const p = { id: uid(), created: nowIso(), name: $('#sPlantName').value.trim(), code: '', notes: '' }; await DB.put('plants', p); pid = p.id; }
-      if (mid === '__new') { const m = { id: uid(), plantId: pid, created: nowIso(), name: $('#sMachName').value.trim(), type: $('#sMachType').value, location: '', rpm: +$('#sMachRpm').value, kw: null, iso: +$('#sMachIso').value, notes: '' }; await DB.put('machines', m); mid = m.id; }
+      if (mid === '__new') { const m = { id: uid(), plantId: pid, created: nowIso(), name: $('#sMachName').value.trim(), type: $('#sMachType').value, location: '', rpm: +$('#sMachRpm').value, kw: null, alarmTpl: $('#sMachTpl').value, notes: '' }; await DB.put('machines', m); mid = m.id; }
       if (ptid === '__new') {
         const pt = { id: uid(), machineId: mid, created: nowIso(), name: $('#sPtName').value.trim(), code: $('#sPtCode').value.trim(), notes: '', cfg: { mode: ms.cfg.mode, navg: ms.cfg.navg, win: ms.cfg.win, dirs: ms.cfg.dirs || 'HVA' }, orient: ms.orient };
         await DB.put('points', pt); ptid = pt.id;
@@ -2081,12 +2139,12 @@ async function vMeas(id) {
   const ms = await DB.get('measurements', id); if (!ms) { location.hash = '#/'; return; }
   const free = !ms.pointId; freeView = free;
   if (free) { for (const k of 'RAYS') $('#nav' + k).classList.remove('act'); $('#navL').classList.add('act'); }
-  const pt = free ? null : await DB.get('points', ms.pointId), m = free ? { iso: pref.get('freeIso', 1) } : await DB.get('machines', pt.machineId), p = free ? null : await DB.get('plants', m.plantId);
+  const pt = free ? null : await DB.get('points', ms.pointId), m = free ? { alarmTpl: pref.get('freeTpl', TPL_DEF) } : await DB.get('machines', pt.machineId), p = free ? null : await DB.get('plants', m.plantId);
   const sibs = (free ? (await DB.all('measurements')).filter(x => !x.pointId) : await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
   const dirsHere = DIRS.filter(d => ms.dirs[d]?.length);
   if (!dirsHere.includes(mvState.dir)) mvState.dir = dirsHere[0];
   if (mvState.ref && !sibs.some(s => s.id === mvState.ref && s.id !== ms.id)) mvState.ref = '';
-  const f1 = ms.rpm > 0 ? ms.rpm/60 : 0, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
+  const f1 = ms.rpm > 0 ? ms.rpm/60 : 0, tpl = tplFor(pt, m), fmax = ms.cfg.fs/2.56;
   const kf = free ? [] : kinFreqs(m, ms.rpm).filter(x => x.hz < fmax);
   if (!mvState.mk || (!kf.length && ['kin','both'].includes(mvState.mk))) mvState.mk = kf.length ? 'both' : 'ord';
   const i = sibs.findIndex(s => s.id === ms.id), prev = sibs[i+1], next = sibs[i-1];
@@ -2103,7 +2161,7 @@ async function vMeas(id) {
       <div class="seg" id="dSeg">${dirsHere.map(d => `<button data-d="${d}" style="--c:var(${DCOL[d]})" class="${d === mvState.dir ? 'on' : ''}">${DNAME[d]}</button>`).join('')}</div>
       <div id="alm"></div>
       <div class="kpis" id="kpis" style="margin-top:12px"></div>
-      <p class="note">Zonas ISO 10816-1 clase ${['I','II','III','IV'][cls]} (orientativo): A &lt; ${ISO[cls][0]} · B &lt; ${ISO[cls][1]} · C &lt; ${ISO[cls][2]} mm/s. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]} · corte ${fmt(fcutOf(ms.cfg), 3)} Hz${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
+      <p class="note">Perfil: ${profNote(tpl)}. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]} · corte ${fmt(fcutOf(ms.cfg), 3)} Hz${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
     </div>
     <div class="grid two">
       <div class="col">
@@ -2169,7 +2227,7 @@ async function vMeas(id) {
     const yv = Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms'));
     const a1 = f1 ? bandAmp(sp, yv, f1, win) : null;
     $('#kpis').innerHTML = `
-      <div class="kpi"><div class="l">Velocidad global</div><div class="v">${fmt(ov.v)}<small>mm/s</small></div><div class="s">${zoneTag(ov.v, cls)} 10–${fmt(Math.min(1000, fmax), 4)} Hz</div></div>
+      <div class="kpi"><div class="l">Velocidad global</div><div class="v">${fmt(ov.v)}<small>mm/s</small></div><div class="s">10–${fmt(Math.min(1000, fmax), 4)} Hz${(tpl.band || '10-1000') === '10-1000' ? ' ' + profTag(ov.v, tpl) : ` · ${(tpl.band).replace('-', '–')} Hz: <b>${fmt(vBand(ov, tpl.band))}</b> ${profTag(vBand(ov, tpl.band), tpl)}`}</div></div>
       <div class="kpi"><div class="l">Aceleración RMS</div><div class="v">${fmt(ov.arms)}<small>g</small></div><div class="s">${fmt(ov.arms*G, 3)} m/s²</div></div>
       <div class="kpi"><div class="l">Aceleración pico</div><div class="v">${fmt(ov.apk)}<small>g</small></div><div class="s">Factor de cresta ${fmt(ov.cf, 2)}</div></div>
       <div class="kpi"><div class="l">1×${f1 ? ' · ' + fmt(f1, 4) + ' Hz' : ''}</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'en ' + fmt(a1.f, 4) + ' Hz · por banda' : 'sin rpm'}</div></div>`;
@@ -2964,7 +3022,7 @@ async function vReport(kind, id) {
     const mach = machines.find(x => x.id === id); if (!mach) { location.hash = '#/bd'; return; }
     const p = plants.find(x => x.id === mach.plantId);
     title = 'Informe de máquina'; backHref = '#/q/' + mach.id;
-    meta = [['Barco', p?.name], ['Máquina', mach.name], ['Tipo', mach.type + (mach.kw ? ' · ' + mach.kw + ' kW' : '') + ' · ' + mach.rpm + ' rpm'], ['Ubicación', mach.location || '–'], ['Clase ISO', ['I','II','III','IV'][mach.iso ?? 1]]];
+    meta = [['Barco', p?.name], ['Máquina', mach.name], ['Tipo', mach.type + (mach.kw ? ' · ' + mach.kw + ' kW' : '') + ' · ' + mach.rpm + ' rpm'], ['Ubicación', mach.location || '–'], ['Perfil de alarma', tplFor(null, mach).name]];
     mach.report ||= {}; notesObj = mach.report; saveNotes = () => DB.put('machines', mach);
     const pts = points.filter(x => x.machineId === mach.id).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
     const list = [];
@@ -3194,7 +3252,7 @@ function synth(fs, f1, a1, a2, seed) {
 async function makeSample() {
   const p = { id: uid(), created: nowIso(), name: 'Buque de ejemplo', code: 'IMO 0000000', notes: 'Datos sintéticos para probar la app' };
   await DB.put('plants', p);
-  const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, iso: 1, notes: '',
+  const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, alarmTpl: 'iso10816-1-II', notes: '',
     kin: [{ id: uid(), type: 'shaft', name: 'Defectos de eje', nh: 3, ratio: 1 },
           { id: uid(), type: 'ind', name: 'Motor', poles: 4, fl: 50, bars: 28, slots: 36, ratio: 1 },
           { id: uid(), type: 'bearing', name: 'Rodamiento 6309 LA', n: 8, bd: 17.46, pd: 72.5, ang: 0, ratio: 1 },
@@ -3216,7 +3274,7 @@ async function makeSample() {
       await DB.put('measurements', meas, false);
     }
   }
-  const m2 = { id: uid(), plantId: p.id, created: nowIso(), name: 'Ventilador sala de máquinas', type: 'Ventilador', location: 'Cubierta 2, popa', rpm: 1450, kw: 11, iso: 0, notes: '' };
+  const m2 = { id: uid(), plantId: p.id, created: nowIso(), name: 'Ventilador sala de máquinas', type: 'Ventilador', location: 'Cubierta 2, popa', rpm: 1450, kw: 11, alarmTpl: 'iso10816-1-I', notes: '' };
   await DB.put('machines', m2);
   const p3 = { id: uid(), machineId: m2.id, created: nowIso(), name: 'Motor lado libre', code: 'V1', cfg: { mode: 1, navg: 1, win: 1 }, orient: { pos: 'DE', z: '+V', x: '+H' } };
   await DB.put('points', p3);
@@ -3275,6 +3333,13 @@ async function xOp(write, read) {
   try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
   if (!pref.get('mode', null)) pref.set('mode', defaultMode());   // se decide una vez y se guarda
   await loadTpls();
+  if (!pref.get('migClass', false)) {   // la clase ISO pasa a ser el perfil de alarma de la máquina
+    try {
+      for (const m of await DB.all('machines')) if (m.iso != null || !m.alarmTpl) { if (!m.alarmTpl || !tplById(m.alarmTpl)) m.alarmTpl = 'iso10816-1-' + ['I','II','III','IV'][m.iso ?? 1]; delete m.iso; await DB.put('machines', m, false); }
+      const fi = pref.get('freeIso', null); if (fi != null && !pref.get('freeTpl', null)) pref.set('freeTpl', 'iso10816-1-' + ['I','II','III','IV'][fi]);
+      pref.set('migClass', true);
+    } catch (e) { console.error(e); }
+  }
   if (!pref.get('migFcut', false)) {   // corte inferior de 2 Hz en todas las medidas existentes
     try {
       for (const pt of await DB.all('points')) if (pt.cfg && pt.cfg.fcut == null) { pt.cfg.fcut = FCUT_DEF; await DB.put('points', pt, false); }
