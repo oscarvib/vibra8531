@@ -120,6 +120,37 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 .alarmbox.l2{background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 45%,transparent)}
 .alarmbox.l0{background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
 body.op .adm{display:none!important}
+.rep{--bg:#f3f4f6;--card:#fff;--fg:#1b2230;--muted:#5b6575;--line:#d9dde3;--grid:#ebeef2;--plot:#fff;--dH:#d9473b;--dV:#2f6fd6;--dA:#1d9a5b;--ref:#9aa3af;
+  background:#fff;color:var(--fg);max-width:960px;margin:0 auto;padding:28px 30px;border:1px solid var(--line);border-radius:12px;font-size:13.5px}
+.rep h1{font-size:22px;margin:0}
+.rep h2{font-size:16px;margin:22px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--acc)}
+.rep h4{font-size:14px;margin:14px 0 6px}
+.rep .rh{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:12px}
+.rep .meta{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px}
+.rep .meta span:nth-child(odd){color:var(--muted)}
+.rep table th,.rep table td{padding:4px 6px}
+.rep .pt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;break-inside:avoid}
+.rep .charts{display:grid;grid-template-columns:1fr 1.4fr;gap:10px}
+.rep canvas{height:170px}
+.rep .edit{min-height:44px;border:1px dashed var(--line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;outline:none}
+.rep .edit:empty:before{content:attr(data-ph);color:var(--muted)}
+.rep .an{border:none!important;padding:0!important;min-height:0!important;display:inline-block;min-width:60px}
+.rep .kp{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin:4px 0}
+.rep .alarmbox{font-size:12.5px;padding:6px 10px;margin-top:6px}
+.repbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:960px;margin:0 auto 12px}
+@media (max-width:700px){.rep{padding:16px}.rep .charts{grid-template-columns:1fr}}
+@media print{
+  @page{size:A4;margin:12mm}
+  html,body{background:#fff!important}
+  header,nav.bottomnav,.repbar,.warnbox,.crumbs,#bTree,.noprint{display:none!important}
+  main{padding:0!important;max-width:none!important}
+  .rep{border:none;padding:0;max-width:none;font-size:11.5px}
+  .rep .edit{border:none;padding:0;min-height:0}
+  .rep .edit:empty{display:none!important}
+  .rep .dz:has(.edit:empty){display:none}
+  .rep h2{break-after:avoid}
+  .rep .pt{break-inside:avoid}
+}
 .bdlay{display:grid;gap:12px;grid-template-columns:290px minmax(0,1fr);align-items:start}
 .tree{position:sticky;top:62px;max-height:calc(100vh - 140px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 8px}
 .tree input{margin-bottom:8px}
@@ -206,7 +237,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.4';
+const APP_VERSION = '3.6';
 const DB = {
   db: null,
   open() {
@@ -346,35 +377,53 @@ const Sensor = {
   },
   /* Mide un eje del sensor y devuelve Int16Array en cg */
   async measureAxis(code, mode, { quiet=true, block=120, onStage=()=>{}, onProg=()=>{}, onRec=()=>{} } = {}) {
-    const acq = N_TIME / MODES[mode];
+    const acq = N_TIME / MODES[mode], T = {};
+    let t0 = performance.now();
+    const lap = k => { const n = performance.now(); T[k] = (T[k] || 0) + (n - t0)/1000; t0 = n; };
     onStage('Configurando');
     const m = await this.commit(code, mode);
     if (m !== mode) log(`El sensor quedó en modo ${m} (pedido ${mode})`, 'warn');
-    await sleep(400);
+    await sleep(250);
+    lap('config');
     if (quiet) {
       this.expectingDisc = true;
       try {
         try { await this.write('B300','B303',[0x81]); } catch (e) {}
         onRec(true, acq); onStage('Grabando sin Bluetooth');
         await sleep(acq * 1000 + 300);
-        onRec(false); onStage('Procesando');
+        onRec(false); lap('grabacion');
+        onStage('Procesando');
         // esperar a que el sensor corte de verdad (puede tardar) antes de reconectar
-        for (let t = 0; t < 50 && this.connected(); t++) await sleep(100);
+        for (let t = 0; t < 60 && this.connected(); t++) await sleep(100);
         if (this.connected()) log('El sensor no cortó el Bluetooth; la medida puede llevar ruido de la radio', 'warn');
-        await sleep(1200);
+        lap('corte');
         onStage('Reconectando');
-        await this.reconnect();
+        await this.reconnectFast();
+        lap('reconexion');
       } finally { this.expectingDisc = false; }
-      await sleep(400);
+      await sleep(150);
     } else {
       await this.write('B300','B303',[0x01]);
       onRec(true, acq); onStage('Grabando');
       await sleep(acq * 1000 + 300);
       onRec(false);
       await sleep(Math.max(0, 2 - acq) * 1000 + 1200);
+      lap('grabacion');
     }
     onStage('Descargando');
-    return this.download(code, block, onProg);
+    const out = await this.download(code, block, onProg);
+    lap('descarga');
+    this.lastTiming = T;
+    return out;
+  },
+  /* Reconexión tras el corte: reintenta enseguida, sin espera fija */
+  async reconnectFast(maxMs=15000) {
+    const t = performance.now();
+    while (performance.now() - t < maxMs) {
+      if (this.connected()) return;
+      try { await this.open(); return; } catch (e) { await sleep(400); }
+    }
+    throw new Error('No se pudo reconectar con el sensor');
   },
   async download(code, block=120, onProg=()=>{}) {
     const out = new Int16Array(N_TIME);
@@ -384,7 +433,6 @@ const Sensor = {
       const dv = await this.q(() => this.op(async () => {
         const ch = await this.getChr('DA00','DA03');
         await this._w(ch, [code, idx >> 8, idx & 255, len]);
-        await sleep(30);
         return ch.readValue();
       }));
       const n = Math.min(len, (dv.byteLength - 4) >> 1);
@@ -529,7 +577,7 @@ class Plot {
     if (!W || !H || !cv.isConnected) return;
     if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)) { cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
     const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
-    const css = getComputedStyle(document.documentElement), C = n => css.getPropertyValue(n).trim();
+    const css = getComputedStyle(cv), C = n => css.getPropertyValue(n).trim();
     g.fillStyle = C('--plot'); g.fillRect(0,0,W,H); g.font = '11px system-ui,sans-serif';
     const L = 50, R = 10, T = 10, B = 30, pw = W - L - R, ph = H - T - B;
     const vis = this.vis();
@@ -680,8 +728,8 @@ function crumbs(parts) {
 }
 let freeView = false;
 async function route() {
-  const h = location.hash || '#/', [, kind, id] = h.split('/');
-  const sect = !kind || ['r','ronda'].includes(kind) ? 'R' : kind === 'libre' ? 'L' : kind === 'ajustes' ? 'S' : kind === 'sync' ? 'Y' : 'A';
+  const h = location.hash || '#/', [, kind, id, id2] = h.split('/');
+  const sect = !kind || ['r','ronda'].includes(kind) || (kind === 'inf' && id === 'r') ? 'R' : kind === 'libre' ? 'L' : kind === 'ajustes' ? 'S' : kind === 'sync' ? 'Y' : 'A';
   for (const k of 'RLAYS') $('#nav' + k).classList.toggle('act', sect === k);
   applyMode(); updateSyncBadge();
   if (kind === 'm' && freeView) { $('#navA').classList.remove('act'); $('#navL').classList.add('act'); }
@@ -709,6 +757,7 @@ async function route() {
     else if (kind === 'ajustes') await vSettings();
     else if (kind === 'libre') await vFree();
     else if (kind === 'sync') await vSync();
+    else if (kind === 'inf') await vReport(id, id2);
     else await vRoutes();
   } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
   setChip();
@@ -812,7 +861,7 @@ const alTag = lv => lv < 0 ? '<span class="hint">–</span>' : `<span class="al 
 const alBox = (a, ok='Sin alarmas') => a.level < 0 ? '' : `<div class="alarmbox l${a.level}"><b>${a.level ? (a.level === 2 ? '⛔ PELIGRO' : '⚠ AVISO') : '✓ ' + ok}</b>${a.reasons.length ? '<div style="margin-top:4px">' + a.reasons.map(esc).join('<br>') + '</div>' : ''}</div>`;
 
 /* --- Cinemática --- */
-const KTYPES = { bearing: 'Rodamiento', ind: 'Motor de inducción', pm: 'Motor de imanes permanentes', blades: 'Álabes (bomba, ventilador)', gear: 'Engrane', fixed: 'Frecuencia fija' };
+const KTYPES = { shaft: 'Defectos de eje', loose: 'Holguras', recip: 'Motor alternativo', bearing: 'Rodamiento', ind: 'Motor de inducción', pm: 'Motor de imanes permanentes', blades: 'Álabes (bomba, ventilador)', gear: 'Engrane', fixed: 'Frecuencia fija' };
 const gcd = (a, b) => b ? gcd(b, a % b) : a, lcm = (a, b) => a && b ? a*b/gcd(a, b) : 0;
 function bearingOrders(k) {
   if (k.n > 0 && k.bd > 0 && k.pd > 0) {
@@ -828,7 +877,17 @@ function kinFreqs(mach, rpm) {
   mach.kin.forEach((k, i) => {
     const col = `--k${i % 6 + 1}`, fr = rpm/60*(k.ratio || 1), nm = k.name || KTYPES[k.type];
     const add = (lab, hz, main=true) => { if (hz > 0) out.push({ comp: nm, label: lab, hz, color: col, main }); };
-    if (k.type === 'bearing') {
+    if (k.type === 'shaft') {
+      const n = Math.max(1, Math.min(20, Math.round(k.nh || 3)));
+      for (let h = 1; h <= n; h++) add(h + '×', h*fr);
+    } else if (k.type === 'loose') {
+      const n = Math.max(1, Math.min(30, Math.round(k.nh || 10)));
+      for (let h = 1; h <= n; h++) add(h + '×', h*fr);
+    } else if (k.type === 'recip') {
+      const st = k.strokes == 2 ? 1 : 0.5, mx = k.max || 6;
+      for (let o = st; o <= mx + 1e-9; o += st) add(String(+o.toFixed(1)).replace('.', ',') + '×', o*fr, Number.isInteger(o) || o === 0.5);
+      if (k.cyl > 0) { const fo = k.cyl*fr*(k.strokes == 2 ? 1 : 0.5); add('Encendido', fo); add('2×Enc.', 2*fo, false); }
+    } else if (k.type === 'bearing') {
       const o = bearingOrders(k);
       if (o.bpfo) { add('BPFO', o.bpfo*fr); add('2×BPFO', 2*o.bpfo*fr, false); add('3×BPFO', 3*o.bpfo*fr, false); }
       if (o.bpfi) { add('BPFI', o.bpfi*fr); add('2×BPFI', 2*o.bpfi*fr, false); add('BPFI−1×', o.bpfi*fr - fr, false); add('BPFI+1×', o.bpfi*fr + fr, false); }
@@ -856,6 +915,20 @@ function kinFreqs(mach, rpm) {
   return out;
 }
 const KFIELDS = {
+  shaft: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Eje motor–bomba' },
+    { k: 'nh', label: 'Nº de armónicos de 1×', type: 'number', def: 3, min: 1, max: 20 },
+    { k: 'ratio', label: 'Relación de velocidad respecto al eje de referencia', type: 'number', def: 1, hint: '1 si es el eje de la máquina' }],
+  loose: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Holguras / soltura' },
+    { k: 'nh', label: 'Nº de armónicos de 1×', type: 'number', def: 10, min: 1, max: 30 },
+    { k: 'ratio', label: 'Relación de velocidad', type: 'number', def: 1 }],
+  recip: [
+    { k: 'name', label: 'Nombre', ph: 'p. ej. Motor diésel generador' },
+    { k: 'strokes', label: 'Ciclo', type: 'select', options: [[4,'4 tiempos (órdenes cada 0,5×)'],[2,'2 tiempos (órdenes cada 1×)']], def: 4 },
+    { k: 'max', label: 'Orden máximo', type: 'number', def: 6, min: 1, max: 24 },
+    { k: 'cyl', label: 'Nº de cilindros', type: 'number', hint: 'Opcional: marca la frecuencia de encendido' },
+    { k: 'ratio', label: 'Relación de velocidad', type: 'number', def: 1 }],
   bearing: [
     { k: 'name', label: 'Nombre', ph: 'p. ej. Rodamiento lado acoplamiento 6309' },
     { k: 'ratio', label: 'Relación de velocidad respecto al eje de referencia', type: 'number', def: 1, hint: '1 si gira con el eje de la máquina' },
@@ -903,7 +976,11 @@ async function editKin(m, idx) {
   if (!v) return;
   m.kin ||= [];
   if (v === '__delete') m.kin.splice(idx, 1);
-  else { const o = { id: k.id || uid(), type: k.type, ...v }; if (idx != null) m.kin[idx] = o; else m.kin.push(o); }
+  else {
+    const o = { id: k.id || uid(), type: k.type, ...v };
+    if (o.strokes != null) o.strokes = +o.strokes;
+    if (idx != null) m.kin[idx] = o; else m.kin.push(o);
+  }
   await DB.put('machines', m); route();
 }
 function kinCard(m) {
@@ -914,7 +991,7 @@ function kinCard(m) {
       const fq = kinFreqs({ kin: [k] }, m.rpm).filter(x => x.main);
       return `<div class="item" data-ki="${i}" style="padding:10px 12px"><span class="dot" style="background:var(--k${i % 6 + 1});width:11px;height:11px"></span>
         <div class="m"><div class="t" style="font-size:14px">${esc(k.name || KTYPES[k.type])} <span class="hint">· ${KTYPES[k.type]}${k.ratio && k.ratio != 1 ? ' · ×' + k.ratio : ''}</span></div>
-        <div class="d">${fq.map(x => `${esc(x.label)} ${fmt(x.hz, 4)} Hz${fr && k.type !== 'fixed' && x.label !== '2×FL' && !x.label.startsWith('fsw') ? ` <span class="hint">(${(x.hz/fr).toFixed(2)}×)</span>` : ''}`).join(' · ') || 'faltan datos'}</div></div>
+        <div class="d">${fq.map(x => `${esc(x.label)} ${fmt(x.hz, 4)} Hz${fr && !['fixed','shaft','loose','recip'].includes(k.type) && x.label !== '2×FL' && !x.label.startsWith('fsw') ? ` <span class="hint">(${(x.hz/fr).toFixed(2)}×)</span>` : ''}`).join(' · ') || 'faltan datos'}</div></div>
         <span class="chev adm">›</span></div>`;
     }).join('')}</div><p class="note">Frecuencias a la velocidad nominal (${m.rpm} rpm). En cada medida se recalculan con sus rpm.</p>`
     : '<p class="note" style="margin-top:0">Añade rodamientos, motor, álabes o engranes para marcar sus frecuencias de fallo en el espectro.</p>'}
@@ -1002,7 +1079,7 @@ async function vMachine(id) {
   const last = {};
   for (const pt of pts) { const ms = await DB.by('measurements', 'pointId', pt.id); ms.sort(byWhen); last[pt.id] = { n: ms.length, m: ms[0] }; }
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
-    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/q/${m.id}'">📄 Informe</button><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri adm" id="bNew">+ Punto</button></div>
     <div class="list">${pts.length ? pts.map(pt => {
       const L = last[pt.id], ov = L.m?.overall;
@@ -1045,7 +1122,7 @@ async function vPoint(id) {
   const ms = (await DB.by('measurements', 'pointId', id)).sort(byWhen);
   const locked = ms.length > 0, cfg = pt.cfg, o = pt.orient || orientDefault;
   const lastRpm = ms[0]?.rpm ?? m.rpm, lastLoad = ms[0]?.load ?? '';
-  const nax = 3, per = 4096/MODES[cfg.mode] + (pref.get('quiet', true) ? 9 : 5);
+  const estS = estMeasure(cfg);
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
       <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
@@ -1062,7 +1139,7 @@ async function vPoint(id) {
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
           <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
           <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
-          <p class="note">Tiempo estimado ~${Math.round(per*nax*cfg.navg)} s: se miden los 3 ejes uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
+          <p class="note">Tiempo estimado ~${estS} s: se miden los 3 ejes uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
         </div>
       </div>
       <div class="col">
@@ -1158,7 +1235,7 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), device: devName(), operator: opName(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
                  cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
   const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
-  const total = 3*cfg.navg; let step = 0;
+  const total = 3*cfg.navg; let step = 0; const timing = {}, tStart = performance.now();
   busy = true; setChip();
   try {
     try { const st = await Sensor.status(); meas.sensor.temp = st.temp; meas.sensor.battery = st.battery; } catch (e) {}
@@ -1167,8 +1244,12 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
       const cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
         onStage: st => prog(step/total, `${tag}: ${st}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
       (meas.dirs[d] ||= []).push(cg);
+      for (const [k, v] of Object.entries(Sensor.lastTiming || {})) timing[k] = (timing[k] || 0) + v;
       step++;
     }
+    timing.total = (performance.now() - tStart)/1000; timing.ejes = total;
+    meas.timing = timing; pref.set('lastTiming', { ...timing, when: nowIso(), mode: cfg.mode });
+    log(`Tiempos: ${fmtTiming(timing)}`);
     meas.overall = overallOf(meas);
     await DB.put('measurements', meas, false);
     log(`Medida ${pointId ? 'guardada' : 'libre'}: ${DIRS.map(d => d + ' ' + fmt(meas.overall[d]?.v)).join(' · ')} mm/s`, 'ok');
@@ -1188,6 +1269,43 @@ async function measurePoint(pt, mach) {
   if (!meas) return;
   pt.orient = orient; await DB.put('points', pt); await refreshPointLast(pt.id);
   location.hash = '#/m/' + meas.id;
+}
+
+const TNAME = { config: 'configuración', grabacion: 'grabación', corte: 'corte BLE', reconexion: 'reconexión', descarga: 'descarga' };
+const fmtTiming = t => Object.keys(TNAME).filter(k => t[k] != null).map(k => `${TNAME[k]} ${t[k].toFixed(1)} s`).join(' · ') + (t.total ? ` · total ${t.total.toFixed(1)} s` : '');
+/* Tiempo estimado de una medida con la última experiencia real */
+function estMeasure(cfg) {
+  const lt = pref.get('lastTiming', null), acq = 4096/MODES[cfg.mode], n = 3*cfg.navg;
+  if (lt?.ejes) { const over = (lt.total - (lt.grabacion || 0))/lt.ejes; return Math.round(n*(acq + 0.3 + over)); }
+  return Math.round(n*(acq + (pref.get('quiet', true) ? 8 : 5)));
+}
+/* Prueba: ¿graba el sensor los tres ejes con un solo disparo? */
+async function testSimultaneous() {
+  if (busy || !Sensor.connected()) return alert('Conecta el sensor primero.');
+  const out = $('#simMsg'); const say = t => { out.innerHTML = t; };
+  const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
+  const eq = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+  busy = true; setChip();
+  try {
+    say('1/3 · Leyendo lo que hay guardado ahora en X e Y…');
+    const pre = {};
+    for (const ax of ['X','Y']) { try { pre[ax] = await Sensor.download(codes[ax]); } catch (e) { pre[ax] = null; } }
+    say('2/3 · Disparando una medida <b>solo del eje Z</b>…');
+    await Sensor.measureAxis(codes.Z, 3, { quiet: pref.get('quiet', true), onStage: st => say('2/3 · ' + st + '…') });
+    say('3/3 · Volviendo a leer X e Y…');
+    const res = [];
+    for (const ax of ['X','Y']) {
+      let post = null; try { post = await Sensor.download(codes[ax]); } catch (e) {}
+      res.push({ ax, pre: !!pre[ax], post: !!post, changed: pre[ax] && post ? !eq(pre[ax], post) : null });
+    }
+    const all = res.every(r => r.changed === true), none = res.every(r => r.changed === false);
+    const verdict = all ? '<b style="color:var(--ok)">El sensor graba los tres ejes con un solo disparo.</b> Se puede hacer la medida unas 3 veces más rápida y con los ejes simultáneos.'
+      : none ? '<b>El sensor graba un eje por disparo</b> (X e Y no han cambiado). Hay que medir eje a eje, como ahora.'
+      : 'Resultado no concluyente. Repite la prueba.';
+    say(res.map(r => `${r.ax}: ${r.post ? (r.changed === null ? 'con datos (sin lectura previa)' : r.changed ? 'datos nuevos' : 'sin cambios') : 'sin datos'}`).join(' · ') + '<br>' + verdict);
+    log('Prueba de captura simultánea: ' + out.textContent, 'ok');
+  } catch (e) { say('Error: ' + esc(e.message)); }
+  finally { busy = false; setChip(); }
 }
 
 /* ---------------- Medida libre (fuera de ruta) ---------------- */
@@ -1697,7 +1815,7 @@ async function vRound(id) {
     }).join('')}<span class="hint">mm/s · cambio vs ${fday(b.when)}</span></div>`;
   };
   view.innerHTML = crumbs([['#/', 'Rutas'], ['#/r/' + r.id, r.name], [null, 'Ronda ' + fday(rd.started)]]) + `
-    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}${whoTxt(rd) ? ' · ' + esc(whoTxt(rd)) : ''}</div></div></div>
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}${whoTxt(rd) ? ' · ' + esc(whoTxt(rd)) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/r/${rd.id}'">📄 Informe</button></div>
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;font-size:13.5px;font-weight:600"><span>${nDone} de ${pts.length} puntos</span><span>${Math.round(100*nDone/Math.max(1, pts.length))} %</span></div>
       <div class="prog" style="display:block"><i style="width:${100*nDone/Math.max(1, pts.length)}%"></i></div>
@@ -2080,6 +2198,121 @@ async function vSyncOp() {
   };
 }
 
+
+/* =====================================================================
+   Informes (ronda y máquina) — imprimibles o guardables como PDF
+   ===================================================================== */
+let repPlots = [];
+window.addEventListener('beforeprint', () => repPlots.forEach(p => p.draw()));
+window.addEventListener('afterprint', () => repPlots.forEach(p => p.draw()));
+const worstDir = ov => DIRS.filter(d => ov?.[d]).sort((a, b) => ov[b].v - ov[a].v)[0];
+function repPointHTML(i, mach, pt, ms, prev, skip) {
+  if (skip) return `<div class="pt"><b>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</b> — <span class="hint">no medido: ${esc(skip.reason)}${skip.comment ? ' · ' + esc(skip.comment) : ''}</span></div>`;
+  if (!ms) return `<div class="pt"><b>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</b> — <span class="hint">sin medidas</span></div>`;
+  const a = evalAlarm(ms.overall, pt, mach), d = worstDir(ms.overall);
+  return `<div class="pt">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:14px">${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</b>${alTag(a.level)}<span class="hint">${fdate(ms.when)} · ${fmt(ms.rpm, 5)} rpm · carga ${fmt(ms.load, 3)} %</span></div>
+    <div class="kp">${DIRS.filter(x => ms.overall?.[x]).map(x => {
+      const v = ms.overall[x].v, pv = prev?.overall?.[x]?.v, ch = pv > 0 ? 100*(v/pv - 1) : null;
+      return `<span><span class="dot" style="background:var(${DCOL[x]})"></span>${DNAME[x]} <b>${fmt(v)}</b> mm/s${ch != null ? ` <span style="color:var(${ch >= 50 ? '--err' : ch >= 25 ? '--warn' : '--muted'})">(${ch >= 0 ? '+' : ''}${Math.round(ch)} %)</span>` : ''}</span>`; }).join('')}</div>
+    ${a.level > 0 ? alBox(a) : ''}
+    <div class="charts"><div><div class="hint">Tendencia · velocidad global (mm/s)</div><canvas id="rt${i}"></canvas></div>
+      <div><div class="hint">Espectro ${DNAME[d]} · velocidad (mm/s RMS)</div><canvas id="rs${i}"></canvas></div></div>
+  </div>`;
+}
+async function drawRepPoint(i, mach, pt, ms) {
+  if (!ms || !$('#rt' + i)) return;
+  const hist = (await DB.by('measurements', 'pointId', pt.id)).filter(x => x.when <= ms.when).sort((a, b) => (a.when < b.when ? -1 : 1));
+  const tr = new Plot($('#rt' + i), { xtime: true, yunit: 'mm/s', zeroBase: true, xfmt: x => fday(new Date(x).toISOString()) });
+  tr.series = DIRS.filter(d => hist.some(x => x.overall?.[d])).map(d => { const r = hist.filter(x => x.overall?.[d]); return { name: d, x: Float64Array.from(r, x => Date.parse(x.when)), y: Float64Array.from(r, x => x.overall[d].v), color: DCOL[d], dots: true, width: 1.8 }; });
+  const c = alarmCfg(pt, mach); tr.hlines = [{ y: c.warn, color: '--warn', label: 'Aviso', inRange: true }, { y: c.danger, color: '--err', label: 'Peligro' }];
+  tr.draw();
+  const d = worstDir(ms.overall), sp = getSpec(ms, d), f1 = ms.rpm/60;
+  const ps = new Plot($('#rs' + i), { xfmt: x => fmt(x, 5) + ' Hz', yunit: 'mm/s', zeroBase: true });
+  ps.series = [{ x: sp.f, y: Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), color: DCOL[d] }];
+  const kf = kinFreqs(mach, ms.rpm).filter(x => x.main && x.hz < ms.cfg.fs/2.56);
+  ps.markers = [...(f1 ? [1,2,3].map(k => ({ x: k*f1, label: k + '×' })) : []), ...kf.map(x => ({ x: x.hz, label: x.label, color: x.color, row: 1 }))].sort((a, b) => a.x - b.x);
+  ps.draw();
+  repPlots.push(tr, ps);
+}
+async function vReport(kind, id) {
+  repPlots = [];
+  const machines = await DB.all('machines'), points = await DB.all('points'), plants = await DB.all('plants');
+  let title, meta = [], groups = [], notesObj, saveNotes, backHref, summaryRows = [];
+  if (kind === 'r') {
+    const rd = await DB.get('rounds', id); if (!rd) { location.hash = '#/'; return; }
+    const r = await DB.get('routes', rd.routeId), p = plants.find(x => x.id === r?.plantId);
+    title = 'Informe de ronda'; backHref = '#/ronda/' + rd.id;
+    meta = [['Barco', p?.name], ['Ruta', r?.name], ['Inicio', fdate(rd.started)], ['Fin', rd.finished ? fdate(rd.finished) : 'en curso'], ['Operador', whoTxt(rd) || '–']];
+    rd.report ||= {}; notesObj = rd.report; saveNotes = () => DB.put('rounds', rd);
+    const byM = new Map();
+    for (const pid of r.points) {
+      const pt = points.find(x => x.id === pid); if (!pt) continue;
+      const it = rd.items?.[pid], ms = it?.measId ? await DB.get('measurements', it.measId) : null;
+      const prev = ms ? (await DB.by('measurements', 'pointId', pid)).filter(x => x.when < ms.when).sort(byWhen)[0] : null;
+      const mach = machines.find(x => x.id === pt.machineId);
+      if (!byM.has(mach.id)) byM.set(mach.id, { mach, pts: [] });
+      byM.get(mach.id).pts.push({ pt, ms, prev, skip: it?.status === 'skip' ? it : (!it ? { reason: 'pendiente' } : null) });
+    }
+    groups = [...byM.values()];
+  } else {
+    const mach = machines.find(x => x.id === id); if (!mach) { location.hash = '#/bd'; return; }
+    const p = plants.find(x => x.id === mach.plantId);
+    title = 'Informe de máquina'; backHref = '#/q/' + mach.id;
+    meta = [['Barco', p?.name], ['Máquina', mach.name], ['Tipo', mach.type + (mach.kw ? ' · ' + mach.kw + ' kW' : '') + ' · ' + mach.rpm + ' rpm'], ['Ubicación', mach.location || '–'], ['Clase ISO', ['I','II','III','IV'][mach.iso ?? 1]]];
+    mach.report ||= {}; notesObj = mach.report; saveNotes = () => DB.put('machines', mach);
+    const pts = points.filter(x => x.machineId === mach.id).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
+    const list = [];
+    for (const pt of pts) { const h = (await DB.by('measurements', 'pointId', pt.id)).sort(byWhen); list.push({ pt, ms: h[0] || null, prev: h[1] || null }); }
+    groups = [{ mach, pts: list }];
+  }
+  // resumen
+  let nOk = 0, nW = 0, nD = 0, nSkip = 0;
+  for (const g of groups) for (const x of g.pts) {
+    if (!x.ms) { nSkip++; summaryRows.push(`<tr><td>${esc(g.mach.name)}</td><td>${x.pt.code ? esc(x.pt.code) + ' · ' : ''}${esc(x.pt.name)}</td><td colspan="4" class="hint" style="text-align:left">${x.skip ? 'No medido: ' + esc(x.skip.reason) : 'Sin medidas'}</td><td></td></tr>`); continue; }
+    const a = evalAlarm(x.ms.overall, x.pt, g.mach); a.level === 2 ? nD++ : a.level === 1 ? nW++ : nOk++;
+    const vm = maxV(x.ms.overall), pv = maxV(x.prev?.overall), ch = pv > 0 ? 100*(vm/pv - 1) : null;
+    summaryRows.push(`<tr><td>${esc(g.mach.name)}</td><td>${x.pt.code ? esc(x.pt.code) + ' · ' : ''}${esc(x.pt.name)}</td>${DIRS.map(d => `<td>${fmt(x.ms.overall?.[d]?.v)}</td>`).join('')}<td>${ch != null ? (ch >= 0 ? '+' : '') + Math.round(ch) + ' %' : '–'}</td><td>${alTag(a.level)}</td></tr>`);
+  }
+  const showAll = pref.get('repAll', false);
+  let idx = 0; const draws = [];
+  const body = groups.map(g => {
+    const shown = g.pts.filter(x => showAll || !x.ms || evalAlarm(x.ms.overall, x.pt, g.mach).level > 0 || kind === 'q');
+    return `<h2>${esc(g.mach.name)} <span class="hint" style="font-weight:400">· ${esc(g.mach.type)}${g.mach.location ? ' · ' + esc(g.mach.location) : ''}</span></h2>
+      ${shown.map(x => { const i = idx++; if (x.ms) draws.push([i, g.mach, x.pt, x.ms]); return repPointHTML(i, g.mach, x.pt, x.ms, x.prev, x.skip); }).join('')}
+      ${shown.length < g.pts.length ? `<p class="hint">${g.pts.length - shown.length} punto(s) sin alarma no mostrados en detalle (ver resumen).</p>` : ''}
+      <div class="dz"><h4>Diagnóstico y recomendación</h4>
+      <div class="edit" contenteditable="true" data-k="${g.mach.id}" data-ph="Escribe aquí el diagnóstico y las acciones recomendadas para ${esc(g.mach.name)}…">${esc(notesObj[g.mach.id] || '')}</div></div>`;
+  }).join('');
+  view.innerHTML = `
+    <div class="repbar">
+      <button class="sm" onclick="location.hash='${backHref}'">‹ Volver</button>
+      <span class="sp" style="flex:1"></span>
+      ${kind === 'r' ? `<label class="chk"><input type="checkbox" id="repAll" ${showAll ? 'checked' : ''}> Detalle de todos los puntos (no solo los que están en alarma)</label>` : ''}
+      <button class="pri" id="bPrint">Imprimir / Guardar PDF</button>
+    </div>
+    <div class="rep" id="rep">
+      <div class="rh">
+        <div><h1>${title}</h1><div class="hint" style="margin-top:4px">Vibra 8531 · emitido el ${fdate(nowIso())}</div></div>
+        <div class="meta">${meta.map(([k, v]) => `<span>${esc(k)}</span><span><b>${esc(v ?? '–')}</b></span>`).join('')}
+          <span>Analista</span><span><b class="edit an" contenteditable="true" id="analyst" data-ph="nombre">${esc(pref.get('analyst', ''))}</b></span></div>
+      </div>
+      <h2>Resumen</h2>
+      <div class="kp" style="font-size:14px"><span>${alTag(0)} ${nOk}</span><span>${alTag(1)} ${nW}</span><span>${alTag(2)} ${nD}</span>${nSkip ? `<span class="hint">· ${nSkip} sin medir</span>` : ''}</div>
+      <div class="tw"><table><tr><th>Máquina</th><th>Punto</th>${DIRS.map(d => `<th>${d} mm/s</th>`).join('')}<th>Δ máx.</th><th>Estado</th></tr>${summaryRows.join('')}</table></div>
+      <p class="hint">Velocidad global RMS. Δ = variación del valor máximo respecto a la medida anterior del punto.</p>
+      <div class="dz"><h4>Observaciones generales</h4>
+      <div class="edit" contenteditable="true" data-k="general" data-ph="Conclusiones generales del informe…">${esc(notesObj.general || '')}</div></div>
+      ${body}
+    </div>`;
+  for (const a of draws) await drawRepPoint(...a);
+  let tmr = null;
+  $$('#rep .edit[data-k]').forEach(el => el.oninput = () => { notesObj[el.dataset.k] = el.innerText.trim(); clearTimeout(tmr); tmr = setTimeout(saveNotes, 600); });
+  $('#analyst').oninput = () => pref.set('analyst', $('#analyst').innerText.trim());
+  if ($('#repAll')) $('#repAll').onchange = () => { pref.set('repAll', $('#repAll').checked); route(); };
+  $('#bPrint').onclick = () => { repPlots.forEach(p => p.draw()); setTimeout(() => window.print(), 100); };
+}
+
 /* ---------------- Ajustes ---------------- */
 async function vSettings() {
   const st = Sensor.lastStatus || {}, inf = Sensor.info || {};
@@ -2108,6 +2341,17 @@ async function vSettings() {
             <span>Temperatura interna</span><span>${st.temp != null ? st.temp.toFixed(1) + ' °C' : '–'}</span><span>Contador</span><span>${st.counter ?? '–'}</span></div>
             <div class="row" style="margin-top:10px"><button class="sm" id="bStat">Actualizar</button></div>`
           : '<p class="note" style="margin-top:0">Sin conectar. Si no aparece al pulsar Conectar, despiértalo con un toque de imán en el icono «U» o sacando y metiendo la pila: anuncia durante 1 h.</p>'}
+        </div>
+        <div class="card">
+          <h3>Velocidad de medida</h3>
+          ${(() => { const lt = pref.get('lastTiming', null); return lt ? `<div class="kv">
+              <span>Última medida</span><span>${fdate(lt.when)} · ${lt.ejes} capturas · ${esc(modeLabel(lt.mode).split(' · ')[0])}</span>
+              <span>Total</span><span><b>${lt.total.toFixed(1)} s</b> (${(lt.total/lt.ejes).toFixed(1)} s por eje)</span>
+              ${Object.keys(TNAME).filter(k => lt[k] != null).map(k => `<span>${TNAME[k]}</span><span>${(lt[k]/lt.ejes).toFixed(2)} s por eje</span>`).join('')}</div>`
+            : '<p class="note" style="margin-top:0">Haz una medida y aquí verás cuánto tarda cada fase.</p>'; })()}
+          <div class="row" style="margin-top:12px"><button class="sm" id="bSim">Probar captura simultánea de 3 ejes</button></div>
+          <div class="pmsg" id="simMsg"></div>
+          <p class="note">La prueba lee X e Y, dispara una medida solo de Z y vuelve a leer X e Y. Si han cambiado, el sensor graba los tres ejes a la vez. Tarda ~30 s; no hace falta tocar el sensor.</p>
         </div>
         <div class="card adm">
           <h3>Adquisición</h3>
@@ -2175,6 +2419,7 @@ async function vSettings() {
     route();
   };
   $('#bDiag').onclick = listSvcs; $('#bDump').onclick = dumpAll;
+  $('#bSim').onclick = testSimultaneous;
   $('#bXr').onclick = () => xOp(false, true); $('#bXw').onclick = () => xOp(true, false); $('#bXwr').onclick = () => xOp(true, true);
   $('#bCopy').onclick = () => navigator.clipboard?.writeText(logBuf.map(e => e.textContent).reverse().join('\n')).then(() => log('Registro copiado', 'ok'));
 }
@@ -2242,7 +2487,8 @@ async function makeSample() {
   const p = { id: uid(), created: nowIso(), name: 'Buque de ejemplo', code: 'IMO 0000000', notes: 'Datos sintéticos para probar la app' };
   await DB.put('plants', p);
   const m = { id: uid(), plantId: p.id, created: nowIso(), name: 'Bomba de lastre 1', type: 'Bomba', location: 'Cámara de máquinas, babor', rpm: 1480, kw: 30, iso: 1, notes: '',
-    kin: [{ id: uid(), type: 'ind', name: 'Motor', poles: 4, fl: 50, bars: 28, slots: 36, ratio: 1 },
+    kin: [{ id: uid(), type: 'shaft', name: 'Defectos de eje', nh: 3, ratio: 1 },
+          { id: uid(), type: 'ind', name: 'Motor', poles: 4, fl: 50, bars: 28, slots: 36, ratio: 1 },
           { id: uid(), type: 'bearing', name: 'Rodamiento 6309 LA', n: 8, bd: 17.46, pd: 72.5, ang: 0, ratio: 1 },
           { id: uid(), type: 'blades', name: 'Rodete', z: 6, ratio: 1 }] };
   await DB.put('machines', m);

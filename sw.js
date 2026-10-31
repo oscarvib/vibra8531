@@ -1,5 +1,5 @@
 // Vibra 8531 · service worker: con conexión usa siempre la última versión; sin conexión, la guardada.
-const CACHE = 'vibra8531-3.4';
+const CACHE = 'vibra8531-3.6';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
