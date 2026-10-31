@@ -198,7 +198,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.2';
+const APP_VERSION = '3.3';
 const DB = {
   db: null,
   open() {
@@ -1687,7 +1687,7 @@ async function officeSync(h) {
   const outDir = await h.getDirectoryHandle('hacia_movil', { create: true });
   const done = new Set(pref.get('processed', []));
   for await (const [name, fh] of inDir.entries()) {
-    if (fh.kind !== 'file' || !name.toLowerCase().endsWith('.json')) continue;
+    if (fh.kind !== 'file' || !/\.(json|txt)$/i.test(name)) continue;
     const f = await fh.getFile(), key = `${name}|${f.size}|${f.lastModified}`;
     if (done.has(key)) continue;
     try {
@@ -1738,7 +1738,7 @@ async function vSync() {
           <div class="row">
             <button id="bPlanDl">Descargar plan para el móvil</button>
             <button id="bDataIn">Importar archivos del móvil…</button>
-            <input type="file" id="fDataIn" accept=".json,application/json" multiple hidden>
+            <input type="file" id="fDataIn" accept=".json,.txt,application/json,text/plain" multiple hidden>
           </div>
           <div class="pmsg" id="manMsg"></div>
         </div>
@@ -1790,7 +1790,14 @@ async function vSync() {
 async function vSyncOp() {
   const { ms, rds } = await pendingData(), pi = pref.get('planInfo', null);
   const needId = !pref.get('device', '') || !opName();
-  const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.json', { type: 'application/json' })] }));
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] }));
+  // el archivo se prepara ya, para que al tocar «Enviar» el menú de compartir se abra al instante (Android exige que sea inmediato)
+  let prepared = null;
+  if (!needId && (ms.length || rds.length)) {
+    const { file, ms: list } = await buildData();
+    const name = `vibra8531_${devName().replace(/\W+/g, '_')}_${stampFile()}.txt`, text = JSON.stringify(file);
+    prepared = { name, text, list, f: new File([text], name, { type: 'text/plain' }) };
+  }
   view.innerHTML = `
     <div class="titlebar"><div><h2>Enviar y recibir</h2><div class="sub">Intercambio con la oficina a través de OneDrive</div></div></div>
     ${needId ? `<div class="card" style="margin-bottom:12px;border-color:var(--warn)">
@@ -1807,7 +1814,7 @@ async function vSyncOp() {
           <h3>Enviar medidas a la oficina</h3>
           <div style="font-size:17px"><b>${ms.length}</b> medida${ms.length === 1 ? '' : 's'} sin enviar${rds.length ? ` · ${rds.length} ronda${rds.length === 1 ? '' : 's'}` : ''}</div>
           <div style="margin-top:12px"><button class="pri big" id="bSend" ${ms.length || rds.length ? '' : 'disabled'}>${canShare ? 'Enviar a OneDrive' : 'Descargar archivo de medidas'}</button></div>
-          <p class="note">${canShare ? 'Se abrirá el menú de compartir: elige <b>OneDrive</b> y la carpeta <b>Vibra8531 › desde_movil</b>.' : 'Guarda el archivo descargado en OneDrive › Vibra8531 › desde_movil.'}</p>
+          <p class="note">${canShare ? 'Se abrirá el menú de compartir: elige <b>OneDrive</b> → «Subir» y la carpeta <b>Vibra8531 › desde_movil</b>.' : 'Guarda el archivo descargado en OneDrive › Vibra8531 › desde_movil.'} Si el móvil no deja compartir, el archivo se descargará para que lo subas a mano.</p>
           <div class="pmsg" id="sendMsg">${pref.get('lastSent', '') ? 'Último envío: ' + fdate(pref.get('lastSent')) : ''}</div>
         </div>
       </div>
@@ -1816,7 +1823,7 @@ async function vSyncOp() {
           <h3>Recibir plan de la oficina</h3>
           ${pi ? `<div class="kv"><span>Plan actual</span><span>${fdate(pi.exported)}</span><span>Contenido</span><span>${pi.routes} rutas · ${pi.points} puntos</span><span>Recibido</span><span>${fdate(pi.received)}</span></div>` : '<p class="note" style="margin-top:0">Todavía no has recibido ningún plan.</p>'}
           <div style="margin-top:12px"><button class="big" id="bPlan">Abrir plan desde OneDrive…</button></div>
-          <input type="file" id="fPlan" accept=".json,application/json" hidden>
+          <input type="file" id="fPlan" accept=".json,.txt,application/json,text/plain" hidden>
           <p class="note">En el selector de archivos, entra en <b>OneDrive › Vibra8531 › hacia_movil</b> y elige <b>vibra8531_plan.json</b>.</p>
           <div class="pmsg" id="planMsg"></div>
         </div>
@@ -1827,21 +1834,25 @@ async function vSyncOp() {
     if (!o || !d) return alert('Rellena tu nombre y el nombre del móvil.');
     pref.set('operator', o); pref.set('device', d); route();
   };
-  $('#bSend').onclick = async () => {
+  $('#bSend').onclick = () => {
     if (needId) return alert('Antes de enviar, indica tu nombre y el del móvil.');
-    const { file, ms: list } = await buildData();
-    const name = `vibra8531_${devName().replace(/\W+/g, '_')}_${stampFile()}.json`, text = JSON.stringify(file);
-    try {
-      if (canShare) {
-        const f = new File([text], name, { type: 'application/json' });
-        await navigator.share({ files: [f], title: name });
-      } else download(name, text, 'application/json');
+    if (!prepared) return;
+    const { name, text, list, f } = prepared;
+    const ok = async how => {
       await markSent(list);
-      $('#sendMsg').textContent = `Enviadas ${list.length} medidas (${name}).`;
-      log(`Medidas enviadas: ${list.length}`, 'ok'); setTimeout(route, 1200);
-    } catch (e) {
-      $('#sendMsg').textContent = e.name === 'AbortError' ? 'Envío cancelado: las medidas siguen pendientes.' : 'Error: ' + e.message;
-    }
+      $('#sendMsg').textContent = `${how}: ${list.length} medidas (${name}).`;
+      log(`Medidas enviadas: ${list.length}`, 'ok'); setTimeout(route, 2500);
+    };
+    const fallback = async why => {
+      download(name, text, 'text/plain');
+      $('#sendMsg').innerHTML = `${why ? esc(why) + '. ' : ''}Se ha <b>descargado</b> el archivo <b>${esc(name)}</b>: súbelo desde Descargas a OneDrive › Vibra8531 › desde_movil.`;
+      await markSent(list); setTimeout(route, 6000);
+    };
+    if (!canShare) { fallback(''); return; }
+    // llamada directa, sin esperas previas
+    navigator.share({ files: [f], title: name })
+      .then(() => ok('Enviadas'))
+      .catch(e => e.name === 'AbortError' ? ($('#sendMsg').textContent = 'Envío cancelado: las medidas siguen pendientes.') : fallback('El móvil no ha permitido compartir (' + e.message + ')'));
   };
   $('#bPlan').onclick = () => $('#fPlan').click();
   $('#fPlan').onchange = async e => {
