@@ -173,6 +173,9 @@ body.op .adm{display:none!important}
 .badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--err);color:#fff;font-size:11px;line-height:18px;margin-left:3px}
 .banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:12px;margin-bottom:12px;background:color-mix(in srgb,var(--acc2) 10%,var(--card));border:1px solid color-mix(in srgb,var(--acc2) 35%,transparent);font-size:14px}
 .banner .m{flex:1;min-width:180px}
+#tKin tr:has(+ tr.src) td{border-bottom:0;padding-bottom:2px}
+.mkkey{display:flex;flex-direction:column;gap:3px;font-size:12px;margin:6px 0 2px}
+.mkkey i.ln{display:inline-block;width:22px;border-top:2px dashed;vertical-align:middle;margin-right:6px}
 </style>
 </head>
 <body>
@@ -245,7 +248,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.4';
+const APP_VERSION = '4.5';
 const DB = {
   db: null,
   open() {
@@ -719,12 +722,12 @@ class Plot {
     g.setLineDash([5,4]); g.textAlign = 'right'; g.textBaseline = 'bottom';
     for (const h of this.hlines) { const yy = Y(h.y); if (yy < T || yy > T+ph) continue; g.strokeStyle = C(h.color); g.beginPath(); g.moveTo(L, yy); g.lineTo(L+pw, yy); g.stroke(); g.fillStyle = C(h.color); g.fillText(h.label, L+pw-4, yy-2); }
     g.setLineDash([3,4]); g.textAlign = 'left'; g.textBaseline = 'top';
-    let lastLbl = -1e9;
+    const lastLbl = [-1e9, -1e9, -1e9];
     for (const mk of this.markers) {
       if (mk.x < x0 || mk.x > x1) continue; const xx = X(mk.x);
       const mc = C(mk.color || '--acc');
-      g.strokeStyle = mc; g.globalAlpha = mk.weak ? .35 : .75; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.globalAlpha = 1;
-      if (!mk.weak && xx - lastLbl > 26) { g.fillStyle = mc; g.fillText(mk.label, xx + 3, T + 2 + (mk.row || 0)*12); lastLbl = xx; }
+      g.setLineDash(mk.dash || [3,4]); g.strokeStyle = mc; g.globalAlpha = mk.weak ? .35 : .75; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T+ph); g.stroke(); g.globalAlpha = 1;
+      const rw = mk.row || 0; if (!mk.weak && xx - lastLbl[rw] > 26) { g.fillStyle = mc; g.fillText(mk.label, xx + 3, T + 2 + rw*12); lastLbl[rw] = xx; }
     }
     g.setLineDash([]);
     for (const s of vis) {
@@ -761,7 +764,7 @@ class Plot {
     if (this.legend?.length) {
       g.font = '11.5px system-ui,sans-serif';
       const lw = Math.max(...this.legend.map(l => g.measureText(l.text).width)) + 26, lh = this.legend.length*16 + 8;
-      const lx = L + pw - lw - 6, ly = T + 6;
+      const mrows = this.markers.length ? Math.max(...this.markers.map(m => m.row || 0)) + 1 : 0, lx = L + pw - lw - 6, ly = T + 6 + mrows*12;
       g.globalAlpha = .92; g.fillStyle = C('--card'); g.fillRect(lx, ly, lw, lh); g.globalAlpha = 1; g.strokeStyle = C('--line'); g.strokeRect(lx, ly, lw, lh);
       g.textAlign = 'left'; g.textBaseline = 'top';
       this.legend.forEach((l, k) => { g.fillStyle = C(l.color || '--fg'); g.fillRect(lx + 8, ly + 9 + k*16, 10, 3); g.fillStyle = C('--fg'); g.fillText(l.text, lx + 22, ly + 4 + k*16); });
@@ -779,10 +782,12 @@ class Plot {
         lines.push([(s.name ? s.name + ': ' : '') + fmt(s.y[i], 4) + ' ' + (this.yunit || '') + (this.tipExtra ? this.tipExtra(s.x[i]) : ''), s.color]);
       }
       lines.unshift([this.xfmt(this.xtime ? xNear : xv), '--fg']);
+      // marcadores bajo el ratón: de dónde sale cada uno
+      for (const mk of this.markers) if (mk.tip && Math.abs(X(mk.x) - this.hover) <= 5) lines.push([mk.tip, mk.color || '--acc']);
       g.font = '12px system-ui,sans-serif';
       const bw = Math.max(...lines.map(l => g.measureText(l[0]).width)) + 16, bh = lines.length*16 + 8;
-      let bx = this.hover + 10; if (bx + bw > L + pw) bx = this.hover - bw - 10;
-      const by = this.legend?.length ? T + 12 + this.legend.length*16 + 8 : T + 6;
+      let bx = this.hover + 10; if (bx + bw > L + pw) bx = Math.max(L, this.hover - bw - 10);
+      const by = (this.legend?.length ? T + 12 + this.legend.length*16 + 8 : T + 6) + (this.markers.length ? (Math.max(...this.markers.map(m => m.row || 0)) + 1)*12 : 0);
       g.fillStyle = C('--card'); g.strokeStyle = C('--line'); g.fillRect(bx, by, bw, bh); g.strokeRect(bx, by, bw, bh);
       g.textAlign = 'left'; g.textBaseline = 'top';
       lines.forEach((l, k) => { g.fillStyle = C(l[1] === '--fg' ? '--fg' : l[1]); g.fillText(l[0], bx + 8, by + 4 + k*16); });
@@ -1073,40 +1078,47 @@ function kinFreqs(mach, rpm) {
   if (!mach?.kin?.length || !(rpm > 0)) return out;
   mach.kin.forEach((k, i) => {
     const col = `--k${i % 6 + 1}`, fr = rpm/60*(k.ratio || 1), nm = k.name || KTYPES[k.type];
-    const add = (lab, hz, main=true) => { if (hz > 0) out.push({ comp: nm, label: lab, hz, color: col, main }); };
+    const r = k.ratio || 1, fx = v => fmt(+v, 4);
+    const eje = `1× del eje = ${fx(fr)} Hz${r !== 1 ? ' (rpm × ' + fx(r) + ')' : ''}`;
+    let why = '';   // origen de la siguiente frecuencia
+    const add = (lab, hz, main=true, src) => { if (hz > 0) out.push({ comp: nm, label: lab, hz, color: col, main, src: src || why }); };
     if (k.type === 'shaft') {
       const n = Math.max(1, Math.min(20, Math.round(k.nh || 3)));
-      for (let h = 1; h <= n; h++) add(h + '×', h*fr);
+      for (let h = 1; h <= n; h++) add(h + '×', h*fr, true, `${h} × (${eje}) · armónico del giro del eje`);
     } else if (k.type === 'loose') {
       const n = Math.max(1, Math.min(30, Math.round(k.nh || 10)));
-      for (let h = 1; h <= n; h++) add(h + '×', h*fr);
+      for (let h = 1; h <= n; h++) add(h + '×', h*fr, true, `${h} × (${eje}) · serie de holguras`);
     } else if (k.type === 'recip') {
       const st = k.strokes == 2 ? 1 : 0.5, mx = k.max || 6;
-      for (let o = st; o <= mx + 1e-9; o += st) add(String(+o.toFixed(1)).replace('.', ',') + '×', o*fr, Number.isInteger(o) || o === 0.5);
-      if (k.cyl > 0) { const fo = k.cyl*fr*(k.strokes == 2 ? 1 : 0.5); add('Encendido', fo); add('2×Enc.', 2*fo, false); }
+      for (let o = st; o <= mx + 1e-9; o += st) add(String(+o.toFixed(1)).replace('.', ',') + '×', o*fr, Number.isInteger(o) || o === 0.5, `${fx(o)} × (${eje}) · orden del motor de ${k.strokes == 2 ? 2 : 4} tiempos`);
+      if (k.cyl > 0) { const fo = k.cyl*fr*(k.strokes == 2 ? 1 : 0.5); why = `${k.cyl} cilindros × ${k.strokes == 2 ? '1' : '0,5'} × (${eje}) · frecuencia de encendido`; add('Encendido', fo); add('2×Enc.', 2*fo, false); }
     } else if (k.type === 'bearing') {
-      const o = bearingOrders(k);
-      if (o.bpfo) { add('BPFO', o.bpfo*fr); add('2×BPFO', 2*o.bpfo*fr, false); add('3×BPFO', 3*o.bpfo*fr, false); }
-      if (o.bpfi) { add('BPFI', o.bpfi*fr); add('2×BPFI', 2*o.bpfi*fr, false); add('BPFI−1×', o.bpfi*fr - fr, false); add('BPFI+1×', o.bpfi*fr + fr, false); }
-      if (o.bsf) { add('BSF', o.bsf*fr); add('2×BSF', 2*o.bsf*fr, false); }
-      if (o.ftf) add('FTF', o.ftf*fr);
+      const o = bearingOrders(k), geo = (k.n > 0 && k.bd > 0 && k.pd > 0) ? `geometría: ${k.n} bolas, Pd ${fx(k.pd)}, Bd ${fx(k.bd)}, ${fx(k.ang || 0)}°` : 'órdenes del fabricante';
+      if (o.bpfo) { why = `${fx(o.bpfo)} × (${eje}) · pista exterior (${geo})`; add('BPFO', o.bpfo*fr); add('2×BPFO', 2*o.bpfo*fr, false); add('3×BPFO', 3*o.bpfo*fr, false); }
+      if (o.bpfi) { why = `${fx(o.bpfi)} × (${eje}) · pista interior (${geo})`; add('BPFI', o.bpfi*fr); add('2×BPFI', 2*o.bpfi*fr, false); add('BPFI−1×', o.bpfi*fr - fr, false); add('BPFI+1×', o.bpfi*fr + fr, false); }
+      if (o.bsf) { why = `${fx(o.bsf)} × (${eje}) · giro de bola (${geo})`; add('BSF', o.bsf*fr); add('2×BSF', 2*o.bsf*fr, false); }
+      if (o.ftf) add('FTF', o.ftf*fr, true, `${fx(o.ftf)} × (${eje}) · jaula (${geo})`);
     } else if (k.type === 'ind') {
       const fl = k.fl || 50, poles = k.poles || 4, sync = 2*fl/poles, slip = Math.max(0, sync - fr);
-      add('2×FL', 2*fl);
+      add('2×FL', 2*fl, true, `2 × red ${fx(fl)} Hz · fuerza magnética (no depende de las rpm)`);
+      why = `1× ± polos × deslizamiento (${poles} × ${fx(slip)} Hz) · barras rotas`;
       if (poles && slip > 0) { add('1×−Fp', fr - poles*slip, false); add('1×+Fp', fr + poles*slip, false); }
+      why = `${k.bars} barras × (${eje}) · paso de barras del rotor`;
       if (k.bars) { add('RBPF', k.bars*fr); add('RBPF−2FL', k.bars*fr - 2*fl, false); add('RBPF+2FL', k.bars*fr + 2*fl, false); }
-      if (k.slots) add('Ranuras', k.slots*fr);
+      if (k.slots) add('Ranuras', k.slots*fr, true, `${k.slots} ranuras × (${eje})`);
     } else if (k.type === 'pm') {
       const pp = (k.poles || 8)/2, fe = pp*fr;
-      add('fe', fe); add('2fe', 2*fe); add('6fe', 6*fe); add('12fe', 12*fe, false);
-      if (k.slots) { add('Ranuras', k.slots*fr); const cg = lcm(k.slots, k.poles || 8); if (cg) add('Cogging', cg*fr); }
+      const fes = `fe = pares de polos ${fx(pp)} × (${eje}) = ${fx(fe)} Hz`;
+      add('fe', fe, true, `${fes} · frecuencia eléctrica`); add('2fe', 2*fe, true, `2 × fe · fuerza electromagnética radial (${fes})`); add('6fe', 6*fe, true, `6 × fe · rizado de par (${fes})`); add('12fe', 12*fe, false, `12 × fe (${fes})`);
+      if (k.slots) { add('Ranuras', k.slots*fr, true, `${k.slots} ranuras × (${eje})`); const cg = lcm(k.slots, k.poles || 8); if (cg) add('Cogging', cg*fr, true, `mcm(${k.slots} ranuras, ${k.poles || 8} polos) = ${cg} × (${eje}) · par de cogging`); }
+      why = `conmutación del convertidor ${fx(k.fsw)} Hz ± 2fe (no depende de las rpm)`;
       if (k.fsw) { add('fsw', k.fsw); add('fsw−2fe', k.fsw - 2*fe, false); add('fsw+2fe', k.fsw + 2*fe, false); }
     } else if (k.type === 'blades') {
-      add('BPF', k.z*fr); add('2×BPF', 2*k.z*fr, false);
+      why = `${k.z} álabes × (${eje}) · paso de álabes`; add('BPF', k.z*fr); add('2×BPF', 2*k.z*fr, false);
     } else if (k.type === 'gear') {
-      add('GMF', k.z*fr); add('2×GMF', 2*k.z*fr, false); add('GMF−1×', k.z*fr - fr, false); add('GMF+1×', k.z*fr + fr, false);
+      why = `${k.z} dientes × (${eje}) · engrane`; add('GMF', k.z*fr); add('2×GMF', 2*k.z*fr, false); add('GMF−1×', k.z*fr - fr, false); add('GMF+1×', k.z*fr + fr, false);
     } else if (k.type === 'fixed') {
-      add(k.label || 'f', k.hz);
+      add(k.label || 'f', k.hz, true, `frecuencia fija ${fx(k.hz)} Hz introducida a mano`);
     }
   });
   return out;
@@ -1908,10 +1920,12 @@ async function vMeas(id) {
     <div class="grid two">
       <div class="col">
         <div class="card">
-          <h3>Órdenes</h3><div class="tw"><table id="tOrd"></table></div>
+          <h3>Órdenes de giro</h3><div class="tw"><table id="tOrd"></table></div>
+          <p class="note">${f1 ? `Múltiplos de la velocidad de <b>esta medida</b>: 1× = ${fmt(ms.rpm, 5)} rpm ÷ 60 = ${fmt(f1, 4)} Hz. Son genéricos (salen solo de las rpm); qué defecto indican lo interpretas tú.` : 'Se calculan a partir de las rpm de la medida.'}</p>
         </div>
         ${kf.length ? `<div class="card">
           <h3>Frecuencias de fallo</h3><div class="tw"><table id="tKin"></table></div>
+          <p class="note">Salen de la <b>cinemática de la máquina</b> (rodamientos, motor, álabes, engranes…), con las rpm de esta medida × la relación de velocidad de cada componente. Se editan en la ficha de la máquina → Cinemática.</p>
           <p class="note">Amplitud por banda: energía de ±${HWIN[ms.cfg.win ?? 1]} líneas alrededor del pico (buscado en ±1 %) dividida por el ENBW de la ventana ${WIN_NAME[ms.cfg.win ?? 1]}. Toca una fila para ampliar el espectro allí.</p>
         </div>` : ''}
         <div class="card">
@@ -1938,10 +1952,11 @@ async function vMeas(id) {
             <label class="field" style="flex:0 0 auto"><span>Eje X</span><select id="xscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
             <label class="field" style="flex:0 0 auto"><span>Cursor</span><select id="cmode"><option value="simple">Simple</option><option value="harm">Armónicos</option></select></label>
             <label class="field" style="flex:0 0 70px" id="wNh"><span>Nº arm.</span><input type="number" id="cnh" min="2" max="40" value="10"></label>
-            <label class="field" style="flex:0 0 auto"><span>Marcadores</span><select id="mk"><option value="ord">Armónicos 1×</option>${kf.length ? '<option value="kin">Cinemática</option><option value="both">Ambos</option>' : ''}<option value="none">Ninguno</option></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Marcadores</span><select id="mk"><option value="ord">Órdenes de giro</option>${kf.length ? '<option value="kin">Frecuencias de fallo</option><option value="both">Ambos</option>' : ''}<option value="none">Ninguno</option></select></label>
             <label class="field"><span>Comparar con</span><select id="ref"><option value="">—</option>${sibs.filter(s => s.id !== ms.id).map(s => `<option value="${s.id}">${fdate(s.when)}${s.rpm ? ' · ' + fmt(s.rpm, 5) + ' rpm' : ''}${s.load != null ? ' · ' + fmt(s.load, 3) + ' %' : ''}${s.note ? ' · ' + esc(s.note) : ''}</option>`).join('')}</select></label>
           </div>
           <canvas id="cvS" style="height:300px"></canvas>
+          <div id="mkKey" class="mkkey"></div>
           <div class="hint" id="sInfo"></div>
           <div id="curBox"></div>
         </div>
@@ -1979,13 +1994,18 @@ async function vMeas(id) {
     }
     const mk = mvState.mk;
     plotS.markers = [
-      ...(f1 && (mk === 'ord' || mk === 'both') ? Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×' })) : []),
-      ...((mk === 'kin' || mk === 'both') ? kf.map(x => ({ x: x.hz, label: x.label, color: x.color, weak: !x.main, row: 1 })) : [])
+      ...(f1 && (mk === 'ord' || mk === 'both') ? Array.from({ length: 10 }, (_, k) => ({ x: f1*(k+1), label: (k+1) + '×', color: '--muted', dash: [2,4], tip: `Orden ${k+1}× = ${k+1} × ${fmt(f1, 4)} Hz (rpm de la medida ÷ 60)` })) : []),
+      ...((mk === 'kin' || mk === 'both') ? kf.map(x => ({ x: x.hz, label: x.label, color: x.color, weak: !x.main, row: 1, dash: [7,3], tip: `${x.comp} · ${x.label}: ${x.src}` })) : [])
     ].sort((a, b) => a.x - b.x);
+    const comps = [...new Map(kf.map(x => [x.comp, x.color])).entries()];
+    $('#mkKey').innerHTML = [
+      f1 && (mk === 'ord' || mk === 'both') ? `<span><i class="ln" style="border-color:var(--muted);border-top-style:dotted"></i><b>Órdenes 1×…10×</b> fila de arriba, gris: múltiplos de la velocidad de esta medida (${fmt(ms.rpm, 5)} rpm → 1× = ${fmt(f1, 4)} Hz). No dicen qué falla, solo «k veces la velocidad».</span>` : '',
+      (mk === 'kin' || mk === 'both') && kf.length ? `<span><i class="ln" style="border-color:var(--fg);border-top-style:dashed"></i><b>Frecuencias de fallo</b> segunda fila, en color: calculadas con la cinemática de la máquina (${comps.map(([c, col]) => `<span style="color:var(${col})">● ${esc(c)}</span>`).join(' ')}).</span>` : '',
+      `<span class="hint">Pasa el ratón (o el dedo) por una línea para ver de dónde sale.</span>`].filter(Boolean).join('');
     if (kf.length && $('#tKin')) {
       $('#tKin').innerHTML = `<tr><th>Componente</th><th>Frecuencia</th><th>Hz</th><th>${UNIT[unit]}</th></tr>` + kf.filter(x => x.main).map(x => {
         const a = bandAmp(sp, y, x.hz, win);
-        return `<tr class="clk" data-hz="${x.hz}"><td style="white-space:normal"><span class="dot" style="background:var(${x.color})"></span>${esc(x.comp)}</td><td>${esc(x.label)}</td><td>${fmt(x.hz, 4)}</td><td>${a ? fmt(a.y) : '–'}</td></tr>`;
+        return `<tr class="clk" data-hz="${x.hz}"><td style="white-space:normal"><span class="dot" style="background:var(${x.color})"></span>${esc(x.comp)}</td><td>${esc(x.label)}</td><td>${fmt(x.hz, 4)}</td><td>${a ? fmt(a.y) : '–'}</td></tr><tr class="clk src" data-hz="${x.hz}"><td colspan="4" class="hint" style="text-align:left;white-space:normal;padding-top:0;font-size:11.5px">↳ ${esc(x.src)}</td></tr>`;
       }).join('');
       $$('#tKin tr[data-hz]').forEach(tr => tr.onclick = () => { const hz = +tr.dataset.hz; plotS.xr = [Math.max(0, hz*0.8 - 5*sp.df), Math.min(fmax, hz*1.2 + 5*sp.df)]; render(); });
     }
@@ -2011,6 +2031,9 @@ async function vMeas(id) {
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline"><b>Cursor ${fmt(cf, 5)} Hz</b><span>${fmt(cf*60, 5)} cpm</span>
           <span>${ca ? fmt(ca.y) + ' ' + UNIT[unit] + ' <span class="hint">(banda)</span>' : ''}</span>${ord ? `<span>${ord.toFixed(3)}× de 1×</span>` : ''}
           <span class="sp" style="flex:1"></span><button class="sm" id="curClr">Quitar cursor</button></div>
+        ${(() => { const tol = Math.max(2*sp.df, cf*0.015), nr = kf.filter(x => Math.abs(x.hz - cf) <= tol);
+          const ok = ord && Math.abs(ord - Math.round(ord*2)/2) < 0.03 && Math.round(ord*2) > 0 ? `<div><span style="color:var(--muted)">┆</span> Orden de giro <b>${String(Math.round(ord*2)/2).replace('.', ',')}×</b> (${fmt(ms.rpm, 5)} rpm)</div>` : '';
+          return ok || nr.length ? `<div style="margin-top:6px;font-size:13px"><span class="hint">Coincide con:</span>${ok}${nr.map(x => `<div><span class="dot" style="background:var(${x.color})"></span><b>${esc(x.label)}</b> · ${esc(x.comp)} <span class="hint">(${fmt(x.hz, 4)} Hz) — ${esc(x.src)}</span></div>`).join('')}</div>` : `<div class="hint" style="margin-top:6px">No coincide con ningún orden de giro ni frecuencia de fallo de la cinemática.</div>`; })()}
         ${harmRows ? `<div class="tw" style="margin-top:6px"><table><tr><th>Armónico</th><th>Hz</th><th>${UNIT[unit]}</th></tr>${harmRows}</table></div>` : ''}
         <div class="row" style="margin-top:10px;align-items:center">
           <span>Velocidad = cursor ÷</span>
@@ -2721,7 +2744,7 @@ async function drawRepPoint(i, mach, pt, ms) {
   const ps = new Plot($('#rs' + i), { xfmt: x => fmt(x, 5) + ' Hz', yunit: 'mm/s', zeroBase: true });
   ps.series = [{ x: sp.f, y: Float64Array.from(sp.gpk, (v, k) => conv(v, sp.f[k], 'vrms')), color: DCOL[d] }];
   const kf = kinFreqs(mach, ms.rpm).filter(x => x.main && x.hz < ms.cfg.fs/2.56);
-  ps.markers = [...(f1 ? [1,2,3].map(k => ({ x: k*f1, label: k + '×' })) : []), ...kf.map(x => ({ x: x.hz, label: x.label, color: x.color, row: 1 }))].sort((a, b) => a.x - b.x);
+  ps.markers = [...(f1 ? [1,2,3].map(k => ({ x: k*f1, label: k + '×', color: '--muted', dash: [2,4] })) : []), ...kf.map(x => ({ x: x.hz, label: x.label, color: x.color, row: 1, dash: [7,3] }))].sort((a, b) => a.x - b.x);
   ps.draw();
   repPlots.push(tr, ps);
 }
