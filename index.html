@@ -248,7 +248,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.5';
+const APP_VERSION = '4.6';
 const DB = {
   db: null,
   open() {
@@ -2058,12 +2058,16 @@ async function vMeas(id) {
       };
     } else $('#curBox').innerHTML = '<p class="hint" style="margin:6px 0 0">Haz clic en el espectro para fijar un cursor (se ajusta al pico más cercano).</p>';
     // órdenes
-    const ords = f1 ? [0.5,1,2,3,4,5,6].filter(k => k*f1 < fmax) : [];
+    const ords = f1 ? [1,2,3,4,5,6].filter(k => k*f1 < fmax) : [];
     const vals = ords.map(k => bandAmp(sp, y, k*f1, win)), A1 = vals[ords.indexOf(1)]?.y;
     let rvals = null; if (refMeas?.dirs[d]?.length) { const rs = getSpec(refMeas, d), ry = Float64Array.from(rs.gpk, (v, k) => conv(v, rs.f[k], unit)); rvals = refMeas.rpm ? ords.map(k => bandAmp(rs, ry, k*(refMeas.rpm/60), refMeas.cfg.win ?? 1)) : null; }
-    $('#tOrd').innerHTML = !f1 ? '<tr><td class="hint" style="text-align:left;white-space:normal">Sin rpm no se pueden calcular los órdenes. Puedes indicarlas al guardar la medida en un punto.</td></tr>' : `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${rvals ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + ords.map((k, j) => {
+    // fila de valor global (en la unidad elegida)
+    const gOf = (o) => !o ? null : unit === 'vrms' ? o.v : unit === 'grms' ? o.arms : o.apk;
+    const gv = gOf(ov), gr = refMeas?.dirs[d]?.length ? gOf(refMeas.overall?.[d] || overallOf(refMeas)[d]) : null;
+    const gRow = `<tr style="font-weight:600"><td>Global</td><td class="hint" style="font-weight:400">${unit === 'vrms' ? '10–' + fmt(Math.min(1000, fmax), 4) : '0–' + fmt(fmax, 4)}</td><td>${fmt(gv)}</td>${gr != null ? `<td>${gr != null ? fmt(gr) : '–'}</td><td>${gr > 0 ? (gv >= gr ? '+' : '') + Math.round(100*(gv/gr - 1)) + ' %' : '–'}</td>` : '<td></td>'}</tr>`;
+    $('#tOrd').innerHTML = !f1 ? `<tr><th></th><th>Hz</th><th>${UNIT[unit]}</th><th></th></tr>${gRow}<tr><td colspan="4" class="hint" style="text-align:left;white-space:normal">Sin rpm no se pueden calcular los órdenes. Puedes indicarlas al guardar la medida en un punto.</td></tr>` : `<tr><th>Orden</th><th>Hz</th><th>${UNIT[unit]}</th>${gr != null ? '<th>Ref.</th><th>Δ</th>' : '<th>vs 1×</th>'}</tr>` + gRow + ords.map((k, j) => {
       const v = vals[j], r = rvals?.[j];
-      return `<tr><td>${k}×</td><td>${v ? fmt(v.f, 4) : '–'}</td><td>${v ? fmt(v.y) : '–'}</td>${rvals ? `<td>${r ? fmt(r.y) : '–'}</td><td>${v && r && r.y > 0 ? (v.y >= r.y ? '+' : '') + Math.round(100*(v.y/r.y - 1)) + ' %' : '–'}</td>` : `<td>${v && A1 ? Math.round(100*v.y/A1) + ' %' : '–'}</td>`}</tr>`;
+      return `<tr><td>${k}×</td><td>${v ? fmt(v.f, 4) : '–'}</td><td>${v ? fmt(v.y) : '–'}</td>${gr != null ? `<td>${r ? fmt(r.y) : '–'}</td><td>${v && r && r.y > 0 ? (v.y >= r.y ? '+' : '') + Math.round(100*(v.y/r.y - 1)) + ' %' : '–'}</td>` : `<td>${v && A1 ? Math.round(100*v.y/A1) + ' %' : '–'}</td>`}</tr>`;
     }).join('');
     // picos
     const [x0, x1] = plotS.range() || [0, fmax];
