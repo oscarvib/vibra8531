@@ -245,7 +245,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.2';
+const APP_VERSION = '4.4';
 const DB = {
   db: null,
   open() {
@@ -579,15 +579,36 @@ function bandAmp(sp, y, fo, win, tolFrac=0.01) {
 }
 
 /* Valores globales de una medida, por dirección */
+/* Bandas normalizadas para alarmas (ISO 10816: 10–1000 Hz; DNV VIBR: 1–200, 4–200, 4–1000 Hz) */
+const BANDS = [['10-1000', '10–1000 Hz (ISO 10816)'], ['4-200', '4–200 Hz (DNV)'], ['4-1000', '4–1000 Hz (DNV)'], ['1-200', '1–200 Hz (DNV)'], ['2-1000', '2–1000 Hz']];
+const bandLims = k => k.split('-').map(Number);
+/* RMS en banda de velocidad (mm/s), desplazamiento (mm) o aceleración (g) a partir del espectro */
+function bandMetric(sp, f0, f1, kind) {
+  const i0 = Math.max(1, lb(sp.f, f0)), i1 = Math.min(sp.f.length, lb(sp.f, f1 + 1e-9));
+  let s = 0;
+  for (let i = i0; i < i1; i++) {
+    const a = sp.gpk[i]/Math.SQRT2, f = sp.f[i], w = 2*Math.PI*f;
+    const x = kind === 'a' ? a : kind === 'v' ? a*G*1000/w : a*G*1000/(w*w);
+    s += x*x;
+  }
+  return Math.sqrt(s/sp.enbw);
+}
 function overallOf(meas) {
-  const out = {}, fmax = Math.min(1000, meas.cfg.fs/2.56);
+  const out = {}, fmaxAll = meas.cfg.fs/2.56, fmax = Math.min(1000, fmaxAll);
   for (const d of DIRS) {
     const bl = meas.dirs[d]; if (!bl || !bl.length) continue;
     const sp = spectrum(bl, meas.cfg.fs, meas.cfg.win), ts = timeStats(bl[bl.length-1]);
-    out[d] = { v: bandRms(sp, 10, fmax, true), arms: ts.rms, apk: ts.pk, cf: ts.cf };
+    const bands = {};
+    for (const [k] of BANDS) {
+      const [lo, hi] = bandLims(k), h = Math.min(hi, fmaxAll);
+      bands[k] = { v: bandMetric(sp, lo, h, 'v'), d: bandMetric(sp, lo, h, 'd'), a: bandMetric(sp, lo, h, 'a'), cut: hi > fmaxAll ? +h.toFixed(0) : undefined };
+    }
+    out[d] = { v: bandRms(sp, 10, fmax, true), arms: ts.rms, apk: ts.pk, cf: ts.cf, bands };
   }
   return out;
 }
+/* valor de velocidad en la banda del perfil (o el global 10–1000 Hz si no hay dato de banda) */
+const vBand = (o, band) => o?.bands?.[band]?.v ?? o?.v;
 const maxV = ov => { const v = DIRS.map(d => ov?.[d]?.v).filter(x => x != null); return v.length ? Math.max(...v) : null; };
 
 /* =====================================================================
@@ -871,6 +892,7 @@ async function route() {
     else if (kind === 'libre') await vFree();
     else if (kind === 'sync') await vSync();
     else if (kind === 'inf') await vReport(id, id2);
+    else if (kind === 'alarmas') await vAlarms();
     else await vRoutes();
   } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
   setChip();
@@ -949,19 +971,81 @@ async function renderTree(sel) {
    Alarmas y cinemática
    ===================================================================== */
 const ALNAME = ['Normal', 'Aviso', 'Peligro'], ALCOL = ['--ok', '--warn', '--err'];
+/* Perfiles de alarma: los ISO vienen incluidos (solo lectura); los propios se guardan y viajan con el plan. */
+const ISO_TPLS = [
+  ...['I','II','III','IV'].map((c, i) => ({ id: 'iso10816-1-' + c, builtin: true, std: 'ISO 10816-1', name: `ISO 10816-1 · Clase ${c}`,
+    desc: ['Máquinas pequeñas (< 15 kW)', 'Máquinas medias (15–75 kW) o hasta 300 kW en base especial', 'Máquinas grandes en base rígida', 'Máquinas grandes en base flexible'][i],
+    zAB: ISO[i][0], warn: ISO[i][1], danger: ISO[i][2] })),
+  { id: 'iso10816-3-g1r', builtin: true, std: 'ISO 10816-3', name: 'ISO 10816-3 · Grupo 1 · rígida', desc: 'Máquinas grandes 300 kW–50 MW, cimentación rígida', zAB: 2.3, warn: 4.5, danger: 7.1 },
+  { id: 'iso10816-3-g1f', builtin: true, std: 'ISO 10816-3', name: 'ISO 10816-3 · Grupo 1 · flexible', desc: 'Máquinas grandes 300 kW–50 MW, cimentación flexible', zAB: 3.5, warn: 7.1, danger: 11 },
+  { id: 'iso10816-3-g2r', builtin: true, std: 'ISO 10816-3', name: 'ISO 10816-3 · Grupo 2 · rígida', desc: 'Máquinas medias 15–300 kW, cimentación rígida', zAB: 1.4, warn: 2.8, danger: 4.5 },
+  { id: 'iso10816-3-g2f', builtin: true, std: 'ISO 10816-3', name: 'ISO 10816-3 · Grupo 2 · flexible', desc: 'Máquinas medias 15–300 kW, cimentación flexible', zAB: 2.3, warn: 4.5, danger: 7.1 }
+].map(t => ({ relWarn: 100, relDanger: 300, relMin: 0.5, band: '10-1000', ...t }));
+/* DNV-RU-SHIP Pt.6 Ch.8 Sec.2 (VIBR), edición julio 2021, tablas 5 a 18.
+   Criterio DNV = peligro (no superar). Aviso = 80 % del criterio (ajustable duplicando el perfil). */
+const DNV_SRC = 'DNV-RU-SHIP Pt.6 Ch.8 Sec.2 (VIBR), ed. julio 2021';
+const dnv = (id, name, band, lim, desc, extra={}) => ({ id: 'dnv-' + id, builtin: true, std: 'DNV VIBR', name: 'DNV · ' + name, desc: desc + ' · ' + DNV_SRC,
+  band, danger: lim, warn: +(lim*0.8).toFixed(2), warnPct: 80, relWarn: 100, relDanger: 300, relMin: 0.5, ...extra });
+const DNV_TPLS = [
+  dnv('shaft', 'Rodamientos de la línea de ejes', '1-200', 5, 'Tabla 5. Horizontal o vertical a la altura del eje; presentar espectros para ver baja frecuencia'),
+  dnv('diesel-lt200', 'Motores diésel < 200 rpm', '1-200', 25, 'Tabla 6. Medir en lo alto del bastidor en ambos extremos. Vertical y longitudinal 10 mm/s y 1 mm; transversal 25 mm/s y 1,5 mm (H = transversal, A = longitudinal)',
+    { vV: 10, vA: 10, vH: 25, dV: 1, dA: 1, dH: 1.5 }),
+  dnv('diesel-gt200-fix', 'Motores diésel > 200 rpm · montaje rígido', '4-200', 15, 'Tabla 7. Bloque arriba y abajo; se admite +20 % en régimen no continuo'),
+  dnv('diesel-gt200-res', 'Motores diésel > 200 rpm · montaje elástico', '4-200', 25, 'Tabla 7. Bloque arriba y abajo; se admite +20 % en régimen no continuo'),
+  dnv('turbo-lt5', 'Turbosoplantes · < 5 MW', '4-200', 45, 'Tabla 8. Parte superior de la carcasa del compresor; aceleración 2,5 g RMS; +20 % en régimen no continuo', { accDanger: 2.5, accWarn: 2, accMetric: 'rms' }),
+  dnv('turbo-5-10', 'Turbosoplantes · 5–10 MW', '4-200', 50, 'Tabla 8. Parte superior de la carcasa del compresor; aceleración 2,0 g RMS', { accDanger: 2.0, accWarn: 1.6, accMetric: 'rms' }),
+  dnv('turbo-gt10', 'Turbosoplantes · > 10 MW', '4-200', 55, 'Tabla 8. Parte superior de la carcasa del compresor; aceleración 1,5 g RMS', { accDanger: 1.5, accWarn: 1.2, accMetric: 'rms' }),
+  dnv('gen-thr', 'Generadores diésel y motores eléctricos de thrusters', '4-200', 18, 'Tabla 9. Cualquier dirección en los cojinetes, montaje rígido o elástico. Investigar si el 1× supera 7 mm/s RMS'),
+  dnv('turbine', 'Turbinas', '4-1000', 7, 'Tabla 10. Cualquier dirección en los cojinetes'),
+  dnv('turbogen', 'Generadores accionados por turbina', '4-1000', 7, 'Tabla 11. Cualquier dirección en los cojinetes'),
+  dnv('gear', 'Reductoras / engranajes', '4-1000', 7, 'Tabla 12. En la cimentación y en el cojinete del eje de entrada'),
+  dnv('motor-int', 'Motores eléctricos, separadoras, bombas hidráulicas, ventiladores · excitación interna', '4-200', 7, 'Tabla 13. En los cojinetes; límite superior ≥ 200 Hz y > 2× rpm. Motores verticales: +50 % arriba del motor'),
+  dnv('motor-ext', 'Motores eléctricos, separadoras, bombas hidráulicas, ventiladores · excitación externa', '4-200', 12, 'Tabla 13. En los cojinetes; límite superior ≥ 200 Hz y > 2× rpm. Motores verticales: +50 % arriba del motor'),
+  dnv('comp-res', 'Compresores de tornillo o centrífugos · montaje elástico', '4-200', 10, 'Tabla 14. En los cojinetes; límite superior ≥ 200 Hz y > 2× rpm'),
+  dnv('comp-fix', 'Compresores de tornillo o centrífugos · montaje rígido', '4-200', 7, 'Tabla 14. En los cojinetes; límite superior ≥ 200 Hz y > 2× rpm'),
+  dnv('recip', 'Compresores y bombas alternativos', '4-200', 30, 'Tabla 15. En los cojinetes; montaje rígido o elástico'),
+  dnv('boiler', 'Calderas', '4-200', 45, 'Tabla 16. En partes rígidas (orejetas, bridas…)'),
+  dnv('pipes', 'Tuberías', '4-200', 45, 'Tabla 17'),
+  dnv('elec-bulk', 'Equipos electrónicos en mamparos', '4-200', 12, 'Tabla 18'),
+  dnv('elec-mast', 'Equipos electrónicos en mástiles', '4-200', 20, 'Tabla 18'),
+  dnv('elec-mach', 'Equipos electrónicos sobre maquinaria', '4-200', 25, 'Tabla 18')
+];
+let USER_TPLS = [];
+const allTpls = () => [...ISO_TPLS, ...DNV_TPLS, ...USER_TPLS];
+const tplById = id => allTpls().find(t => t.id === id);
+async function loadTpls() { try { USER_TPLS = (await DB.get('kv', 'alarmTpls'))?.list || []; } catch (e) { USER_TPLS = []; } }
+async function saveTpls() { await DB.put('kv', { id: 'alarmTpls', list: USER_TPLS }, false); }
+/* perfil efectivo: el del punto, si no el de la máquina, si no ISO 10816-1 según la clase de la máquina */
+function tplFor(pt, mach) { return tplById(pt?.alarm?.tpl) || tplById(mach?.alarmTpl) || tplById('iso10816-1-' + ['I','II','III','IV'][mach?.iso ?? 1]); }
 function alarmCfg(pt, mach) {
-  const a = pt?.alarm || {}, cls = mach?.iso ?? 1;
-  return { warn: a.warn ?? ISO[cls][1], danger: a.danger ?? ISO[cls][2], absDefault: a.warn == null && a.danger == null,
-           relWarn: a.relWarn ?? 100, relDanger: a.relDanger ?? 300, relMin: a.relMin ?? 0.5, ref: a.ref || null };
+  const a = pt?.alarm || {}, t = tplFor(pt, mach);
+  const pick = k => a[k] ?? t[k];
+  const c = { tpl: t, warn: pick('warn'), danger: pick('danger'), absDefault: a.warn == null && a.danger == null,
+           relWarn: pick('relWarn'), relDanger: pick('relDanger'), relMin: pick('relMin'), band: t.band || '10-1000', warnPct: t.warnPct ?? 80,
+           accWarn: pick('accWarn'), accDanger: pick('accDanger'), accMetric: t.accMetric || 'pk', ref: a.ref || null };
+  for (const d of DIRS) { c['v' + d] = t['v' + d]; c['d' + d] = t['d' + d]; }
+  return c;
 }
 function evalAlarm(overall, pt, mach) {
   if (!overall) return { level: -1, reasons: [] };
   const c = alarmCfg(pt, mach); let level = 0; const reasons = [];
+  const bl = c.band, bTxt = bl === '10-1000' ? '' : ` (${bl.replace('-', '–')} Hz)`;
   for (const d of DIRS) {
-    const v = overall[d]?.v; if (v == null) continue;
-    if (v >= c.danger) { level = 2; reasons.push(`${d} ${fmt(v)} mm/s ≥ peligro ${fmt(c.danger)}`); }
-    else if (v >= c.warn) { level = Math.max(level, 1); reasons.push(`${d} ${fmt(v)} mm/s ≥ aviso ${fmt(c.warn)}`); }
-    const r = c.ref?.overall?.[d]?.v;
+    const o = overall[d]; if (!o || o.v == null) continue;
+    const v = vBand(o, bl), B = o.bands?.[bl];
+    const dg = c['v' + d] ?? c.danger, wn = c['v' + d] != null ? c['v' + d]*c.warnPct/100 : c.warn;
+    if (v >= dg) { level = 2; reasons.push(`${d} ${fmt(v)} mm/s${bTxt} ≥ peligro ${fmt(dg)}`); }
+    else if (v >= wn) { level = Math.max(level, 1); reasons.push(`${d} ${fmt(v)} mm/s${bTxt} ≥ aviso ${fmt(wn)}`); }
+    const dd = c['d' + d];
+    if (dd > 0 && B?.d != null) {
+      if (B.d >= dd) { level = 2; reasons.push(`${d} desplazamiento ${fmt(B.d)} mm RMS ≥ peligro ${fmt(dd)}`); }
+      else if (B.d >= dd*c.warnPct/100) { level = Math.max(level, 1); reasons.push(`${d} desplazamiento ${fmt(B.d)} mm RMS ≥ aviso ${fmt(dd*c.warnPct/100)}`); }
+    }
+    const ap = c.accMetric === 'rms' ? B?.a : o.apk, aU = c.accMetric === 'rms' ? `g RMS${bTxt}` : 'g pico';
+    if (ap != null && c.accDanger > 0 && ap >= c.accDanger) { level = 2; reasons.push(`${d} ${fmt(ap)} ${aU} ≥ peligro ${fmt(c.accDanger)} g`); }
+    else if (ap != null && c.accWarn > 0 && ap >= c.accWarn) { level = Math.max(level, 1); reasons.push(`${d} ${fmt(ap)} ${aU} ≥ aviso ${fmt(c.accWarn)} g`); }
+    if (B?.cut && bl !== '10-1000') reasons.push(`${d}: banda recortada a ${B.cut} Hz por el rango de medida`);
+    const r = vBand(c.ref?.overall?.[d], bl);
     if (r > 0 && v >= c.relMin) {
       const ch = 100*(v/r - 1);
       if (ch >= c.relDanger) { level = 2; reasons.push(`${d} +${Math.round(ch)} % sobre la referencia (peligro ≥ +${c.relDanger} %)`); }
@@ -1111,6 +1195,79 @@ function kinCard(m) {
   </div>`;
 }
 
+
+/* ---------------- Gestor de perfiles de alarma ---------------- */
+const TPL_FIELDS = [
+  { k: 'name', label: 'Nombre del perfil', req: true, ph: 'p. ej. Bombas de lastre · criterio propio' },
+  { k: 'desc', label: 'Descripción / criterio', type: 'textarea' },
+  { k: 'band', label: 'Banda de frecuencia de la velocidad global', type: 'select', options: BANDS, def: '10-1000' },
+  { k: 'zAB', label: 'Límite zona A/B (mm/s RMS)', type: 'number', min: 0, hint: 'Informativo: máquina nueva o recién puesta en servicio' },
+  { k: 'warn', label: 'Aviso: velocidad global (mm/s RMS)', type: 'number', min: 0, req: true, hint: 'Normalmente el límite B/C' },
+  { k: 'danger', label: 'Peligro: velocidad global (mm/s RMS)', type: 'number', min: 0, req: true, hint: 'Normalmente el límite C/D' },
+  { k: 'relWarn', label: 'Aviso relativo (% sobre la referencia)', type: 'number', min: 0, def: 100 },
+  { k: 'relDanger', label: 'Peligro relativo (% sobre la referencia)', type: 'number', min: 0, def: 300 },
+  { k: 'relMin', label: 'Nivel mínimo para la alarma relativa (mm/s)', type: 'number', min: 0, def: 0.5 },
+  { k: 'accMetric', label: 'Aceleración: tipo de valor', type: 'select', options: [['pk', 'Pico de la señal'], ['rms', 'RMS en la banda del perfil']], def: 'pk' },
+  { k: 'accWarn', label: 'Aviso: aceleración (g) — opcional', type: 'number', min: 0, hint: 'Útil para rodamientos, engranes y turbos; vacío = sin alarma de aceleración' },
+  { k: 'accDanger', label: 'Peligro: aceleración (g) — opcional', type: 'number', min: 0 },
+  { k: 'warnPct', label: 'Aviso para límites por dirección y desplazamiento (% del peligro)', type: 'number', min: 1, max: 100, def: 80 },
+  { k: 'vH', label: 'Peligro solo en H (mm/s) — opcional', type: 'number', min: 0, hint: 'Si se rellena, sustituye al peligro general en esa dirección' },
+  { k: 'vV', label: 'Peligro solo en V (mm/s) — opcional', type: 'number', min: 0 },
+  { k: 'vA', label: 'Peligro solo en A (mm/s) — opcional', type: 'number', min: 0 },
+  { k: 'dH', label: 'Peligro de desplazamiento en H (mm RMS) — opcional', type: 'number', min: 0 },
+  { k: 'dV', label: 'Peligro de desplazamiento en V (mm RMS) — opcional', type: 'number', min: 0 },
+  { k: 'dA', label: 'Peligro de desplazamiento en A (mm RMS) — opcional', type: 'number', min: 0 }];
+async function tplUsage(id) {
+  const [ms, ps] = await Promise.all([DB.all('machines'), DB.all('points')]);
+  return { machines: ms.filter(m => m.alarmTpl === id), points: ps.filter(p => p.alarm?.tpl === id) };
+}
+async function editTpl(t, copy=false) {
+  const base = copy ? { ...t, name: t.name + ' (copia)', desc: (t.desc || '') + (t.builtin ? ` — basado en ${t.name}` : '') } : t || {};
+  const v = await formDialog(copy ? 'Duplicar perfil' : t ? 'Editar perfil' : 'Nuevo perfil', TPL_FIELDS, base, t && !copy ? { danger: 'Borrar perfil' } : {});
+  if (!v) return false;
+  if (v === '__delete') return delTpl(t);
+  if (!(v.danger > v.warn)) { alert('El nivel de peligro debe ser mayor que el de aviso.'); return false; }
+  if (v.accWarn && v.accDanger && !(v.accDanger > v.accWarn)) { alert('La aceleración de peligro debe ser mayor que la de aviso.'); return false; }
+  const clean = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== null && x !== ''));
+  if (t && !copy) Object.assign(t, clean, { updated: nowIso() });
+  else USER_TPLS.push({ id: uid(), created: nowIso(), updated: nowIso(), ...clean });
+  await saveTpls(); route(); return true;
+}
+async function delTpl(t) {
+  const u = await tplUsage(t.id), n = u.machines.length + u.points.length;
+  if (!confirm(n ? `El perfil «${t.name}» se usa en ${u.machines.length} máquina(s) y ${u.points.length} punto(s). Si lo borras, pasarán a usar el perfil ISO según la clase de la máquina. ¿Borrar?` : `¿Borrar el perfil «${t.name}»?`)) return false;
+  for (const m of u.machines) { delete m.alarmTpl; await DB.put('machines', m); }
+  for (const p of u.points) { delete p.alarm.tpl; await DB.put('points', p); }
+  USER_TPLS = USER_TPLS.filter(x => x.id !== t.id); await saveTpls(); route(); return true;
+}
+async function vAlarms() {
+  const [ms, ps] = await Promise.all([DB.all('machines'), DB.all('points')]);
+  const use = id => ({ m: ms.filter(m => m.alarmTpl === id).length, p: ps.filter(p => p.alarm?.tpl === id).length,
+                       d: id.startsWith('iso10816-1-') ? ms.filter(m => !m.alarmTpl && 'iso10816-1-' + ['I','II','III','IV'][m.iso ?? 1] === id).length : 0 });
+  const card = t => { const u = use(t.id); return `<div class="item" style="cursor:default;align-items:flex-start">
+    <div class="m"><div class="t">${t.builtin ? '🔒 ' : ''}${esc(t.name)}</div>
+      ${t.desc ? `<div class="d" style="white-space:normal">${esc(t.desc)}</div>` : ''}
+      <div class="dirs" style="margin-top:6px"><span class="tag">${(t.band || '10-1000').replace('-', '–')} Hz</span>${t.zAB ? `<span>A/B <b>${fmt(t.zAB)}</b></span>` : ''}<span class="al al1">⚠ ${fmt(t.warn)}</span><span class="al al2">⛔ ${fmt(t.danger)}</span><span class="hint">mm/s</span>
+        ${DIRS.some(d => t['v' + d]) ? `<span class="hint">· por dirección ${DIRS.filter(d => t['v' + d]).map(d => d + ' ' + fmt(t['v' + d])).join(' · ')} mm/s</span>` : ''}
+        ${DIRS.some(d => t['d' + d]) ? `<span class="hint">· desplaz. ${DIRS.filter(d => t['d' + d]).map(d => d + ' ' + fmt(t['d' + d])).join(' · ')} mm</span>` : ''}
+        <span class="hint">· relativa +${t.relWarn} % / +${t.relDanger} % desde ${fmt(t.relMin)} mm/s</span>${t.accWarn || t.accDanger ? `<span class="hint">· acel. ${t.accWarn ? fmt(t.accWarn) : '–'} / ${t.accDanger ? fmt(t.accDanger) : '–'} g ${t.accMetric === 'rms' ? 'RMS' : 'pico'}</span>` : ''}</div>
+      <div class="hint" style="margin-top:4px">En uso: ${u.m} máquina(s)${u.d ? ` + ${u.d} por clase ISO` : ''} · ${u.p} punto(s)</div></div>
+    <div style="display:flex;flex-direction:column;gap:6px"><button class="sm" data-dup="${t.id}">Duplicar</button>${t.builtin ? '' : `<button class="sm" data-ed="${t.id}">Editar</button><button class="sm danger" data-del="${t.id}">Borrar</button>`}</div></div>`; };
+  view.innerHTML = crumbs([['#/bd', 'Base de datos'], [null, 'Gestor de alarmas']]) + `
+    <div class="titlebar"><div><h2>Gestor de alarmas</h2><div class="sub">Perfiles que se asignan a máquinas y puntos</div></div><span class="sp"></span><button class="pri adm" id="bNewTpl">+ Nuevo perfil</button></div>
+    <div class="card" style="margin-bottom:12px"><h3>Perfiles propios (${USER_TPLS.length})</h3>
+      ${USER_TPLS.length ? `<div class="list">${USER_TPLS.map(card).join('')}</div>` : '<p class="note" style="margin-top:0">Aún no hay perfiles propios. Crea uno nuevo o duplica uno ISO para adaptarlo.</p>'}</div>
+    <div class="card" style="margin-bottom:12px"><h3>DNV · maquinaria (VIBR, solo lectura)</h3><div class="list">${DNV_TPLS.map(card).join('')}</div>
+      <p class="note">${DNV_SRC}, tablas 5 a 18. Peligro = criterio DNV (no debe superarse); aviso = 80 % del criterio. Cada perfil evalúa la velocidad RMS en la banda que indica DNV. Usa «Duplicar» para ajustar el aviso o adaptar un perfil.</p></div>
+    <div class="card"><h3>Perfiles ISO (solo lectura)</h3><div class="list">${ISO_TPLS.map(card).join('')}</div>
+      <p class="note">Valores de velocidad global RMS (10–1000 Hz). Aviso = límite B/C, peligro = límite C/D. Los perfiles ISO no se pueden modificar: usa «Duplicar» para crear una versión propia con otro nombre.</p></div>`;
+  $('#bNewTpl').onclick = () => editTpl(null);
+  $$('[data-dup]').forEach(b => b.onclick = () => editTpl(tplById(b.dataset.dup), true));
+  $$('[data-ed]').forEach(b => b.onclick = () => editTpl(tplById(b.dataset.ed)));
+  $$('[data-del]').forEach(b => b.onclick = () => delTpl(tplById(b.dataset.del)));
+}
+const tplOptions = inheritLabel => [['', inheritLabel], ...allTpls().map(t => [t.id, (t.builtin ? '' : '★ ') + t.name])];
+
 /* ---------------- Barcos ---------------- */
 async function vPlants() {
   const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
@@ -1123,7 +1280,7 @@ async function vPlants() {
       <div class="list">${alarms.map(({ pt, m, a }) => `<a class="item" href="#/p/${pt.id}" style="padding:10px 12px">${alTag(a.level)}
         <div class="m"><div class="t" style="font-size:14px">${esc(plants.find(p => p.id === m?.plantId)?.name || '')} › ${esc(m?.name || '')} › ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
         <div class="d">${fday(pt.last.when)} · ${esc(a.reasons[0] || '')}${a.reasons.length > 1 ? ` (+${a.reasons.length - 1})` : ''}</div></div><span class="chev">›</span></a>`).join('')}</div></div>` : ''}
-    <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="pri adm" id="bNew">+ Barco</button></div>
+    <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/alarmas'">⚙ Gestor de alarmas</button><button class="pri adm" id="bNew">+ Barco</button></div>
     <div class="list">${plants.length ? plants.map(p => {
       const n = machines.filter(m => m.plantId === p.id).length;
       return `<a class="item" href="#/b/${p.id}"><div class="m"><div class="t">${esc(p.name)}</div><div class="d">${esc(p.code || '')}${p.code ? ' · ' : ''}${n} máquina${n === 1 ? '' : 's'}</div></div><span class="chev">›</span></a>`;
@@ -1147,6 +1304,7 @@ const machineFields = m => [
   { k: 'rpm', label: 'Velocidad nominal (rpm)', type: 'number', min: 0, req: true },
   { k: 'kw', label: 'Potencia nominal (kW)', type: 'number', min: 0 },
   { k: 'iso', label: 'Clase ISO 10816-1', type: 'select', options: ISO_NAME.map((n, i) => [i, n]), def: 1 },
+  { k: 'alarmTpl', label: 'Perfil de alarma de la máquina', type: 'select', options: tplOptions('ISO 10816-1 según la clase de arriba'), def: '', hint: 'Lo heredan sus puntos, salvo que el punto tenga otro' },
   { k: 'notes', label: 'Notas', type: 'textarea' }];
 async function vPlant(id) {
   const p = await DB.get('plants', id); if (!p) { location.hash = '#/bd'; return; }
@@ -1167,7 +1325,7 @@ async function vPlant(id) {
   $('#bNew').onclick = async () => {
     const v = await formDialog('Nueva máquina', machineFields());
     if (!v) return;
-    const m = { id: uid(), plantId: id, created: nowIso(), ...v, iso: +v.iso }; await DB.put('machines', m); location.hash = '#/q/' + m.id;
+    const m = { id: uid(), plantId: id, created: nowIso(), ...v, iso: +v.iso }; if (!m.alarmTpl) delete m.alarmTpl; await DB.put('machines', m); location.hash = '#/q/' + m.id;
   };
 }
 
@@ -1221,7 +1379,7 @@ async function vMachine(id) {
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar máquina', machineFields(m), m, { danger: 'Borrar máquina' });
     if (v === '__delete') { if (confirmDel(`la máquina «${m.name}» con sus puntos y medidas`)) { await delMachineDeep(m.id); location.hash = '#/b/' + p.id; } return; }
-    if (v) { Object.assign(m, v, { iso: +v.iso }); await DB.put('machines', m); route(); }
+    if (v) { Object.assign(m, v, { iso: +v.iso }); if (!m.alarmTpl) delete m.alarmTpl; await DB.put('machines', m); route(); }
   };
   $('#bNew').onclick = async () => {
     const v = await formDialog('Nuevo punto', pointFields(null, false), { mode: pref.get('lastMode', 1), navg: 2, win: 1 });
@@ -1276,21 +1434,23 @@ async function vPoint(id) {
           <h3>Alarmas<span class="sp"></span><button class="sm adm" id="bAlarm">Configurar</button></h3>
           ${(() => { const c = alarmCfg(pt, m), a = evalAlarm(ms[0]?.overall, pt, m);
             return `<div class="kv">
-              <span>Aviso / peligro</span><span><b>${fmt(c.warn)}</b> / <b>${fmt(c.danger)}</b> mm/s${c.absDefault ? ' <span class="hint">(ISO clase ' + ['I','II','III','IV'][m.iso ?? 1] + ')</span>' : ''}</span>
+              <span>Perfil</span><span><b>${esc(c.tpl.name)}</b>${pt.alarm?.tpl ? '' : ' <span class="hint">(heredado)</span>'}</span>
+              <span>Aviso / peligro</span><span><b>${fmt(c.warn)}</b> / <b>${fmt(c.danger)}</b> mm/s · ${c.band.replace('-', '–')} Hz${c.absDefault ? '' : ' <span class="hint">(ajustado en el punto)</span>'}</span>
+              ${c.accWarn || c.accDanger ? `<span>Aceleración</span><span>${c.accWarn ? fmt(c.accWarn) : '–'} / ${c.accDanger ? fmt(c.accDanger) : '–'} g pico</span>` : ''}
               <span>Referencia</span><span>${c.ref ? `${fday(c.ref.when)} · ${DIRS.filter(d => c.ref.overall?.[d]).map(d => d + ' ' + fmt(c.ref.overall[d].v)).join(' · ')} mm/s` : '<span class="hint">sin referencia (márcala desde una medida)</span>'}</span>
               ${c.ref ? `<span>Relativa</span><span>aviso +${c.relWarn} % · peligro +${c.relDanger} % <span class="hint">(desde ${fmt(c.relMin)} mm/s)</span></span>` : ''}
               <span>Estado actual</span><span>${alTag(a.level)}</span></div>${a.level > 0 ? alBox(a) : ''}`; })()}
         </div>
         <div class="card">
-          <h3>Tendencia · velocidad global<span class="sp"></span><span class="hint">10–${fmt(Math.min(1000, MODES[cfg.mode]/2.56), 4)} Hz</span></h3>
+          <h3>Tendencia · velocidad global<span class="sp"></span><span class="hint">${alarmCfg(pt, m).band.replace('-', '–')} Hz</span></h3>
           <canvas id="cvTr" class="short"></canvas>
           <p class="note">Líneas de aviso y peligro del punto. Pulsa sobre un punto para abrir la medida.</p>
         </div>
         <div class="card">
           <h3>Medidas (${ms.length})</h3>
           ${ms.length ? `<div class="tw"><table><tr><th>Fecha</th><th>rpm</th><th>Carga</th>${DIRS.map(d => `<th><span class="dot" style="background:var(${DCOL[d]})"></span>${d}</th>`).join('')}<th></th></tr>
-            ${ms.map(x => `<tr class="clk" data-id="${x.id}"><td>${fdate(x.when)}</td><td>${fmt(x.rpm, 5)}</td><td>${fmt(x.load, 3)} %</td>${DIRS.map(d => `<td>${fmt(x.overall?.[d]?.v)}</td>`).join('')}<td>${alTag(evalAlarm(x.overall, pt, m).level)}</td></tr>`).join('')}</table></div>
-            <p class="note">Velocidad global en mm/s RMS.</p>` : '<div class="empty">Sin medidas todavía.</div>'}
+            ${ms.map(x => `<tr class="clk" data-id="${x.id}"><td>${fdate(x.when)}</td><td>${fmt(x.rpm, 5)}</td><td>${fmt(x.load, 3)} %</td>${DIRS.map(d => `<td>${fmt(vBand(x.overall?.[d], alarmCfg(pt, m).band))}</td>`).join('')}<td>${alTag(evalAlarm(x.overall, pt, m).level)}</td></tr>`).join('')}</table></div>
+            <p class="note">Velocidad global en mm/s RMS en la banda del perfil (${alarmCfg(pt, m).band.replace('-', '–')} Hz).</p>` : '<div class="empty">Sin medidas todavía.</div>'}
         </div>
       </div>
     </div>`;
@@ -1304,7 +1464,7 @@ async function vPoint(id) {
   const asc = ms.slice().reverse();
   tr.series = DIRS.filter(d => asc.some(x => x.overall?.[d])).map(d => {
     const rows = asc.filter(x => x.overall?.[d]);
-    return { name: d, x: Float64Array.from(rows, x => Date.parse(x.when)), y: Float64Array.from(rows, x => x.overall[d].v), color: DCOL[d], dots: true, width: 2 };
+    return { name: d, x: Float64Array.from(rows, x => Date.parse(x.when)), y: Float64Array.from(rows, x => vBand(x.overall[d], alarmCfg(pt, m).band)), color: DCOL[d], dots: true, width: 2 };
   });
   const lim = ISO[m.iso ?? 1];
   tr.hlines = [];
@@ -1315,17 +1475,17 @@ async function vPoint(id) {
   tr.hlines = [{ y: ac.warn, color: '--warn', label: 'Aviso', inRange: true }, { y: ac.danger, color: '--err', label: 'Peligro' }];
   tr.draw();
   $('#bAlarm').onclick = async () => {
-    const a = pt.alarm || {}, cls = m.iso ?? 1;
+    const a = pt.alarm || {}, inh = tplFor({}, m);
     const v = await formDialog('Alarmas del punto', [
-      { k: 'warn', label: 'Aviso (mm/s RMS)', type: 'number', min: 0, ph: `${ISO[cls][1]} (ISO clase ${['I','II','III','IV'][cls]}, límite B/C)`, hint: 'Vacío = valor ISO de la clase de la máquina' },
-      { k: 'danger', label: 'Peligro (mm/s RMS)', type: 'number', min: 0, ph: `${ISO[cls][2]} (límite C/D)` },
-      { k: 'relWarn', label: 'Aviso relativo (% sobre la referencia)', type: 'number', min: 0, def: 100 },
-      { k: 'relDanger', label: 'Peligro relativo (% sobre la referencia)', type: 'number', min: 0, def: 300 },
-      { k: 'relMin', label: 'Nivel mínimo para la alarma relativa (mm/s)', type: 'number', min: 0, def: 0.5, hint: 'Evita avisos por cambios relativos en niveles muy bajos' }],
+      { k: 'tpl', label: 'Perfil de alarma', type: 'select', options: tplOptions(`Heredar de la máquina: ${inh.name}`), def: '', hint: 'Los perfiles se gestionan en Base de datos → Gestor de alarmas' },
+      { k: 'warn', label: 'Ajuste del punto · aviso (mm/s RMS)', type: 'number', min: 0, ph: 'vacío = el del perfil', hint: 'Solo si este punto necesita un valor distinto al del perfil' },
+      { k: 'danger', label: 'Ajuste del punto · peligro (mm/s RMS)', type: 'number', min: 0, ph: 'vacío = el del perfil' },
+      { k: 'relWarn', label: 'Ajuste del punto · aviso relativo (%)', type: 'number', min: 0, ph: 'vacío = el del perfil' },
+      { k: 'relDanger', label: 'Ajuste del punto · peligro relativo (%)', type: 'number', min: 0, ph: 'vacío = el del perfil' }],
       a, a.ref ? { danger: 'Quitar referencia' } : {});
     if (!v) return;
     if (v === '__delete') { delete pt.alarm.ref; }
-    else pt.alarm = { ...a, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x == null ? undefined : x])) };
+    else { pt.alarm = { ...a }; for (const [k, x] of Object.entries(v)) { if (x == null || x === '') delete pt.alarm[k]; else pt.alarm[k] = x; } }
     await DB.put('points', pt); route();
   };
   // editar
@@ -2249,7 +2409,7 @@ async function buildPlan() {
     const done = (await DB.by('rounds', 'routeId', r.id)).filter(x => x.finished).sort((a, b) => (a.finished < b.finished ? 1 : -1))[0];
     if (done && (!r.lastDone || done.finished > r.lastDone)) r.lastDone = done.finished;
   }
-  return { app: 'vibra8531', kind: 'plan', schema: 3, exported: nowIso(), from: devName(), plants, machines, points, routes };
+  return { app: 'vibra8531', kind: 'plan', schema: 3, exported: nowIso(), from: devName(), plants, machines, points, routes, alarmTemplates: USER_TPLS };
 }
 async function importPlan(j) {
   if (j.app !== 'vibra8531' || j.kind !== 'plan') throw new Error('el archivo no es un plan de Vibra 8531');
@@ -2259,6 +2419,7 @@ async function importPlan(j) {
     for (const o of await DB.all(st)) if (!keep.has(o.id)) await DB.del(st, o.id);
     for (const o of j[st] || []) await DB.put(st, o, false);
   }
+  if (j.alarmTemplates) { USER_TPLS = j.alarmTemplates; await saveTpls(); }
   pref.set('planInfo', { exported: j.exported, received: nowIso(), from: j.from, routes: (j.routes || []).length, points: (j.points || []).length });
   log(`Plan recibido: ${(j.routes || []).length} rutas, ${(j.points || []).length} puntos`, 'ok');
 }
@@ -2764,7 +2925,7 @@ function download(name, text, type) {
 }
 async function saveBackup() {
   const [plants, machines, points, measurements, routes, rounds] = await Promise.all(STORES.map(s => DB.all(s)));
-  const out = { app: 'vibra8531', schema: 2, exported: nowIso(), plants, machines, points, routes, rounds,
+  const out = { app: 'vibra8531', schema: 2, exported: nowIso(), plants, machines, points, routes, rounds, alarmTemplates: USER_TPLS,
     measurements: measurements.map(x => ({ ...x, dirs: Object.fromEntries(Object.entries(x.dirs).map(([d, bl]) => [d, bl.map(b => Array.from(b))])) })) };
   download(`vibra8531_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(out), 'application/json');
   log(`Copia guardada: ${plants.length} barcos, ${measurements.length} medidas`, 'ok');
@@ -2777,6 +2938,7 @@ function openBackup(file) {
       if (j.app !== 'vibra8531') throw new Error('no es una copia de Vibra 8531');
       let n = 0;
       for (const s of ['plants','machines','points','routes','rounds']) for (const o of j[s] || []) { await DB.put(s, o, false); n++; }
+      if (j.alarmTemplates) { for (const t of j.alarmTemplates) { const i = USER_TPLS.findIndex(x => x.id === t.id); if (i < 0) USER_TPLS.push(t); else if ((t.updated || '') >= (USER_TPLS[i].updated || '')) USER_TPLS[i] = t; } await saveTpls(); }
       for (const o of j.measurements || []) {
         o.dirs = Object.fromEntries(Object.entries(o.dirs).map(([d, bl]) => [d, bl.map(b => Int16Array.from(b))]));
         await DB.put('measurements', o, false); n++;
@@ -2897,6 +3059,18 @@ async function xOp(write, read) {
   try { await DB.open(); } catch (e) { view.innerHTML = `<div class="empty">No se pudo abrir la base de datos local: ${esc(e.message)}</div>`; return; }
   try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
   if (!pref.get('mode', null)) pref.set('mode', defaultMode());   // se decide una vez y se guarda
+  await loadTpls();
+  if (!pref.get('migBands', false)) {   // añade las bandas normalizadas a las medidas existentes
+    try {
+      for (const x of await DB.all('measurements')) { if (x.dirs && Object.keys(x.dirs).length) { x.overall = overallOf(x); await DB.put('measurements', x, false); } }
+      for (const pt of await DB.all('points')) {
+        await refreshPointLast(pt.id);
+        const p2 = await DB.get('points', pt.id);
+        if (p2?.alarm?.ref?.id) { const r = await DB.get('measurements', p2.alarm.ref.id); if (r) { p2.alarm.ref.overall = r.overall; await DB.put('points', p2, false); } }
+      }
+      pref.set('migBands', true);
+    } catch (e) { console.error(e); }
+  }
   if (!isOp() && !pref.get('migLast', false)) { try { for (const pt of await DB.all('points')) await refreshPointLast(pt.id); pref.set('migLast', true); } catch (e) {} }
   applyMode(); setChip(); route();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(e => log('Modo sin conexión no disponible: ' + e.message, 'warn'));
