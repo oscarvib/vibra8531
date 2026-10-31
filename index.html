@@ -112,6 +112,19 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 .bottomnav a{flex:1;text-align:center;padding:10px 0 12px;color:var(--muted);text-decoration:none;font-weight:600;font-size:13px}
 .bottomnav a.act{color:var(--acc)}
 body.op .adm{display:none!important}
+.bdlay{display:grid;gap:12px;grid-template-columns:290px minmax(0,1fr);align-items:start}
+.tree{position:sticky;top:62px;max-height:calc(100vh - 140px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 8px}
+.tree input{margin-bottom:8px}
+.tn{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;font-size:13.5px;line-height:1.25;user-select:none}
+.tn:hover{background:var(--bg)}
+.tn.sel{background:color-mix(in srgb,var(--acc) 15%,transparent);font-weight:700}
+.tn .cr{width:14px;flex:none;text-align:center;color:var(--muted);font-size:11px}
+.tn .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn .zd{width:9px;height:9px;border-radius:50%;flex:none;background:var(--line)}
+.tn .ct{font-size:11.5px;color:var(--muted);flex:none}
+.tk{padding-left:14px}
+.treebtn{display:none;margin-bottom:10px}
+@media (max-width:979px){.bdlay{grid-template-columns:1fr}.tree{display:none;position:static;max-height:60vh}.tree.open{display:block}.treebtn{display:inline-block}}
 .badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--err);color:#fff;font-size:11px;line-height:18px;margin-left:3px}
 .banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:12px;margin-bottom:12px;background:color-mix(in srgb,var(--acc2) 10%,var(--card));border:1px solid color-mix(in srgb,var(--acc2) 35%,transparent);font-size:14px}
 .banner .m{flex:1;min-width:180px}
@@ -185,7 +198,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 const DB = {
   db: null,
   open() {
@@ -651,7 +664,8 @@ $('#bConn').onclick = connect;
 /* =====================================================================
    Rutas
    ===================================================================== */
-const view = $('#view');
+const mainView = $('#view');
+let view = mainView;
 function crumbs(parts) {
   return `<nav class="crumbs">${parts.map(([href, t], i) => (i ? '<span class="sep">›</span>' : '') + (href ? `<a href="${href}">${esc(t)}</a>` : `<span>${esc(t)}</span>`)).join('')}</nav>`;
 }
@@ -662,6 +676,18 @@ async function route() {
   for (const k of 'RLAYS') $('#nav' + k).classList.toggle('act', sect === k);
   applyMode(); updateSyncBadge();
   if (kind === 'm' && freeView) { $('#navA').classList.remove('act'); $('#navL').classList.add('act'); }
+  // base de datos con árbol a la izquierda (modo oficina)
+  let treeSel = null;
+  if (!isOp() && ['bd','b','q','p','m'].includes(kind)) {
+    if (kind === 'm') { const ms = await DB.get('measurements', id); if (ms?.pointId) treeSel = { k: 'p', id: ms.pointId }; }
+    else treeSel = kind === 'bd' ? { k: 'bd' } : { k: kind, id };
+  }
+  if (treeSel) {
+    if (!$('#bdmain')) mainView.innerHTML = `<button class="sm treebtn" id="bTree">☰ Árbol</button><div class="bdlay"><aside class="tree" id="tree"></aside><div id="bdmain"></div></div>`;
+    view = $('#bdmain');
+    $('#bTree').onclick = () => $('#tree').classList.toggle('open');
+    await renderTree(treeSel);
+  } else { view = mainView; }
   try {
     if (!kind) await vRoutes();
     else if (kind === 'bd') await vPlants();
@@ -679,6 +705,73 @@ async function route() {
   setChip();
 }
 window.addEventListener('hashchange', () => { if (!busy) route(); window.scrollTo(0, 0); });
+
+
+/* ---------------- Árbol de la base de datos ---------------- */
+let treeQuery = '';
+const ZDOT = z => z < 0 ? 'var(--line)' : `var(${ZCOL[z]})`;
+async function refreshPointLast(pid) {
+  const pt = await DB.get('points', pid); if (!pt) return;
+  const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen)[0];
+  const sum = ms ? { id: ms.id, when: ms.when, rpm: ms.rpm, load: ms.load, overall: ms.overall, device: ms.device, operator: ms.operator } : null;
+  if (isOp() && pt.last && (!sum || pt.last.when > sum.when)) return;   // en el móvil se conserva el dato del plan si es más reciente
+  pt.last = sum; await DB.put('points', pt, false);
+}
+async function renderTree(sel) {
+  const T = $('#tree'); if (!T) return;
+  const [plants, machines, points] = await Promise.all(['plants','machines','points'].map(s => DB.all(s)));
+  const open = new Set(pref.get('treeOpen', []));
+  // abrir el camino hasta la selección
+  if (sel.k === 'p') { const pt = points.find(x => x.id === sel.id), m = machines.find(x => x.id === pt?.machineId); if (m) { open.add(m.id); open.add(m.plantId); } }
+  if (sel.k === 'q') { const m = machines.find(x => x.id === sel.id); if (m) { open.add(m.id); open.add(m.plantId); } }
+  if (sel.k === 'b') open.add(sel.id);
+  pref.set('treeOpen', [...open]);
+  const q = treeQuery.trim().toLowerCase(), hit = t => !q || t.toLowerCase().includes(q);
+  const zPt = (pt, m) => pt.last?.overall ? zoneOf(maxV(pt.last.overall), m.iso) : -1;
+  const node = (k, id, name, z, ct, hasKids, isOpen, extra='') =>
+    `<div class="tn ${sel.k === k && sel.id === id ? 'sel' : ''}" data-k="${k}" data-id="${id}">
+      <span class="cr" data-tg="${hasKids ? id : ''}">${hasKids ? (isOpen ? '▾' : '▸') : ''}</span>
+      <span class="zd" style="background:${ZDOT(z)}" title="${z < 0 ? 'sin medidas' : 'zona ' + 'ABCD'[z]}"></span>
+      <span class="nm">${extra}${esc(name)}</span>${ct != null ? `<span class="ct">${ct}</span>` : ''}</div>`;
+  let html = `<input id="tq" placeholder="Buscar…" value="${esc(treeQuery)}">
+    <div class="tn ${sel.k === 'bd' ? 'sel' : ''}" data-k="bd"><span class="cr"></span><span class="nm"><b>Todos los barcos</b></span><span class="ct">${plants.length}</span></div>`;
+  for (const p of plants.sort((a, b) => a.name.localeCompare(b.name))) {
+    const ms_ = machines.filter(m => m.plantId === p.id).sort((a, b) => a.name.localeCompare(b.name));
+    let pz = -1, inner = '', pHit = hit(p.name) || !q;
+    for (const m of ms_) {
+      const pts = points.filter(x => x.machineId === m.id).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
+      let mz = -1, ptsHtml = '';
+      const mHit = hit(m.name);
+      for (const pt of pts) {
+        const z = zPt(pt, m); mz = Math.max(mz, z);
+        if (q && !hit(pt.name + ' ' + (pt.code || '')) && !mHit && !hit(p.name)) continue;
+        ptsHtml += node('p', pt.id, pt.name, z, pt.last ? new Date(pt.last.when).toLocaleDateString([], { day: 'numeric', month: 'short' }) : null, false, false, pt.code ? `<b>${esc(pt.code)}</b> · ` : '');
+      }
+      pz = Math.max(pz, mz);
+      if (q && !ptsHtml && !mHit && !hit(p.name)) continue;
+      const mo = q ? true : open.has(m.id);
+      inner += node('q', m.id, m.name, mz, pts.length, pts.length > 0, mo) + (mo && ptsHtml ? `<div class="tk">${ptsHtml}</div>` : '');
+    }
+    if (q && !inner && !pHit) continue;
+    const po = q ? true : open.has(p.id);
+    html += node('b', p.id, p.name, pz, ms_.length, ms_.length > 0, po) + (po && inner ? `<div class="tk">${inner}</div>` : '');
+  }
+  html += `<div class="row adm" style="margin-top:10px"><button class="sm" id="tNew">+ Barco</button><button class="sm" id="tAll">Expandir todo</button><button class="sm" id="tNone">Plegar</button></div>
+    <p class="hint" style="margin:8px 6px 0">● color = peor zona ISO de la última medida</p>`;
+  T.innerHTML = html;
+  $$('#tree .tn').forEach(el => el.onclick = e => {
+    const tg = e.target.closest('[data-tg]')?.dataset.tg;
+    if (tg) { const o = new Set(pref.get('treeOpen', [])); o.has(tg) ? o.delete(tg) : o.add(tg); pref.set('treeOpen', [...o]); renderTree(sel); return; }
+    const k = el.dataset.k, id = el.dataset.id;
+    $('#tree').classList.remove('open');
+    location.hash = k === 'bd' ? '#/bd' : `#/${k}/${id}`;
+  });
+  const tq = $('#tq');
+  tq.oninput = () => { treeQuery = tq.value; renderTree(sel).then(() => { const n = $('#tq'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }); };
+  $('#tNew').onclick = () => { location.hash = '#/bd'; setTimeout(() => $('#bNew')?.click(), 300); };
+  $('#tAll').onclick = () => { pref.set('treeOpen', [...plants.map(x => x.id), ...machines.map(x => x.id)]); renderTree(sel); };
+  $('#tNone').onclick = () => { pref.set('treeOpen', []); renderTree(sel); };
+}
 
 /* ---------------- Barcos ---------------- */
 async function vPlants() {
@@ -877,7 +970,7 @@ function bindOrient(o) {
 async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const om = orientMap(orient), fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
-  const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
+  const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), device: devName(), operator: opName(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
                  cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
   const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
   const total = 3*cfg.navg; let step = 0;
@@ -908,7 +1001,7 @@ async function measurePoint(pt, mach) {
   const orient = { z: $('#oZ').value, x: $('#oX').value };
   const meas = await runMeasure({ cfg: pt.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: pt.id });
   if (!meas) return;
-  pt.orient = orient; await DB.put('points', pt);
+  pt.orient = orient; await DB.put('points', pt); await refreshPointLast(pt.id);
   location.hash = '#/m/' + meas.id;
 }
 
@@ -1062,7 +1155,7 @@ async function saveToPoint(ms) {
         pt.orient = ms.orient; await DB.put('points', pt);
       }
       ms.pointId = ptid; ms.rpm = rpm; ms.load = load;
-      await DB.put('measurements', ms, false);
+      await DB.put('measurements', ms, false); await refreshPointLast(ptid);
       log('Medida libre guardada en un punto', 'ok');
       finish(ptid);
     };
@@ -1116,6 +1209,8 @@ async function vMeas(id) {
             <span>Sensor</span><span>${esc(ms.sensor?.name || '–')} · ${esc(ms.sensor?.fw || '')}</span>
             <span>Temperatura interna</span><span>${ms.sensor?.temp != null ? fmt(ms.sensor.temp, 3) + ' °C' : '–'}</span>
             <span>Ejes</span><span>${esc(orientText(ms.orient))}</span>
+            <span>Operador</span><span>${esc(ms.operator || '–')}</span>
+            <span>Dispositivo</span><span>${esc(ms.device || '–')}</span>
           </div>
           <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger ${free ? '' : 'adm'}" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
         </div>
@@ -1188,7 +1283,7 @@ async function vMeas(id) {
   $('#bNext').onclick = () => next && (location.hash = '#/m/' + next.id);
   $('#bCsv').onclick = () => exportCSV(ms, pt, free ? null : m, p);
   if (free) $('#bSaveTo').onclick = async () => { const ptid = await saveToPoint(ms); if (ptid) { freeView = false; location.hash = '#/m/' + ms.id; route(); } };
-  $('#bDel').onclick = async () => { if (confirmDel(free ? 'esta medida libre' : 'esta medida')) { await DB.del('measurements', ms.id); location.hash = free ? '#/libre' : '#/p/' + pt.id; } };
+  $('#bDel').onclick = async () => { if (confirmDel(free ? 'esta medida libre' : 'esta medida')) { await DB.del('measurements', ms.id); if (!free) await refreshPointLast(pt.id); location.hash = free ? '#/libre' : '#/p/' + pt.id; } };
   render();
 }
 
@@ -1219,7 +1314,8 @@ const stTag = st => `<span class="tag" style="background:color-mix(in srgb,var($
 
 /* ---------------- Lista de rutas (pantalla del operador) ---------------- */
 async function vRoutes() {
-  const routes = await DB.all('routes'), plants = await DB.all('plants');
+  const myDev = pref.get('device', '');
+  const routes = (await DB.all('routes')).filter(r => !isOp() || !r.assignedTo || r.assignedTo === myDev), plants = await DB.all('plants');
   const rows = [];
   for (const r of routes) rows.push({ r, s: await routeState(r), p: plants.find(x => x.id === r.plantId) });
   const rank = x => x.s.open ? 0 : x.s.days == null ? 1 : x.s.days < 0 ? 2 : 3;
@@ -1231,7 +1327,7 @@ async function vRoutes() {
       const pr = st.open ? roundProgress(st.open, r) : null;
       return `<a class="item" href="#/r/${r.id}"><div class="m">
         <div class="t">${esc(r.name)}</div>
-        <div class="d">${esc(p?.name || '¿barco borrado?')} · ${r.points.length} punto${r.points.length === 1 ? '' : 's'} · ${periodName(r.period)}${st.lastDone ? ' · última ' + fday(st.lastDone.finished) : ''}</div>
+        <div class="d">${!isOp() ? (r.assignedTo ? '📱 ' + esc(r.assignedTo) + ' · ' : '📱 todos · ') : ''}${esc(p?.name || '¿barco borrado?')} · ${r.points.length} punto${r.points.length === 1 ? '' : 's'} · ${periodName(r.period)}${st.lastDone ? ' · última ' + fday(st.lastDone.finished) : ''}</div>
         <div style="margin-top:6px">${stTag(st.st)}${pr ? ` <span class="hint">${pr.done}/${pr.total} puntos</span>` : ''}</div>
       </div><span class="chev">›</span></a>`;
     }).join('') : `<div class="empty">${isOp() ? 'No hay rutas en este móvil.<br><br><button class="pri" onclick="location.hash=\'#/sync\'">Recibir el plan de la oficina</button>' : plants.length
@@ -1246,6 +1342,7 @@ async function editRoute(r) {
   const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
   const machines = await DB.all('machines'), points = await DB.all('points');
   let sel = r ? [...r.points] : [];
+  const devNames = [...new Set([...Object.keys((await getDevices())), ...(await DB.all('routes')).map(x => x.assignedTo).filter(Boolean)])].sort();
   return new Promise(resolve => {
     const d = $('#dlg');
     d.innerHTML = `<form method="dialog">
@@ -1253,6 +1350,7 @@ async function editRoute(r) {
       <label class="field"><span>Nombre *</span><input id="rName" required value="${esc(r?.name || '')}" placeholder="p. ej. Cámara de máquinas · mensual"></label>
       <div class="row">
         <label class="field"><span>Barco</span><select id="rPlant" ${r ? 'disabled' : ''}>${plants.map(p => `<option value="${p.id}" ${r?.plantId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Asignada a</span><input id="rDev" list="devList" value="${esc(r?.assignedTo || '')}" placeholder="Todos los móviles"><datalist id="devList">${devNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>
         <label class="field"><span>Periodicidad</span><select id="rPer">${PERIODS.map(([v, n]) => `<option value="${v}" ${(r?.period ?? 30) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       </div>
       <label class="field"><span>Instrucciones para el operador</span><textarea id="rDesc" placeholder="p. ej. medir con la máquina en servicio normal">${esc(r?.description || '')}</textarea></label>
@@ -1293,7 +1391,7 @@ async function editRoute(r) {
       if (!$('#rName').value.trim()) return;
       if (!sel.length) return alert('Añade al menos un punto a la ruta.');
       const o = r || { id: uid(), created: nowIso(), plantId: $('#rPlant').value };
-      Object.assign(o, { name: $('#rName').value.trim(), period: +$('#rPer').value, description: $('#rDesc').value.trim(), points: sel });
+      Object.assign(o, { name: $('#rName').value.trim(), period: +$('#rPer').value, description: $('#rDesc').value.trim(), points: sel, assignedTo: $('#rDev').value.trim() });
       await DB.put('routes', o);
       finish(o.id); location.hash = '#/r/' + o.id; route();
     };
@@ -1310,7 +1408,7 @@ async function vRoute(id) {
   const lastByPt = {};
   for (const pid of r.points) { const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen); lastByPt[pid] = ms[0] || points.find(x => x.id === pid)?.last; }
   view.innerHTML = crumbs([['#/', 'Rutas'], [null, r.name]]) + `
-    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ${periodName(r.period)} · ${r.points.length} puntos</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ${periodName(r.period)} · ${r.points.length} puntos${!isOp() ? ' · 📱 ' + esc(r.assignedTo || 'todos los móviles') : ''}</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
         <div class="card">
@@ -1324,8 +1422,8 @@ async function vRoute(id) {
         </div>
         <div class="card">
           <h3>Historial de rondas</h3>
-          ${st.rounds.length ? `<div class="tw"><table><tr><th>Inicio</th><th>Fin</th><th>Medidos</th><th>Saltados</th></tr>
-            ${st.rounds.map(x => { const it = Object.values(x.items || {}); return `<tr class="clk" data-rd="${x.id}"><td>${fdate(x.started)}</td><td>${x.finished ? fdate(x.finished) : '<span class="tag">en curso</span>'}</td><td>${it.filter(i => i.status === 'done').length}</td><td>${it.filter(i => i.status === 'skip').length}</td></tr>`; }).join('')}</table></div>`
+          ${st.rounds.length ? `<div class="tw"><table><tr><th>Inicio</th><th>Fin</th><th>Medidos</th><th>Saltados</th><th>Operador</th></tr>
+            ${st.rounds.map(x => { const it = Object.values(x.items || {}); return `<tr class="clk" data-rd="${x.id}"><td>${fdate(x.started)}</td><td>${x.finished ? fdate(x.finished) : '<span class="tag">en curso</span>'}</td><td>${it.filter(i => i.status === 'done').length}</td><td>${it.filter(i => i.status === 'skip').length}</td><td>${esc(whoTxt(x) || '–')}</td></tr>`; }).join('')}</table></div>`
             : '<div class="hint">Todavía no se ha realizado ninguna ronda.</div>'}
         </div>
       </div>
@@ -1344,7 +1442,7 @@ async function vRoute(id) {
   $('#bEdit').onclick = () => editRoute(r);
   $('#bGo').onclick = async () => {
     let rd = st.open;
-    if (!rd) { rd = { id: uid(), routeId: r.id, started: nowIso(), finished: null, items: {} }; await DB.put('rounds', rd); }
+    if (!rd) { rd = { id: uid(), routeId: r.id, started: nowIso(), finished: null, items: {}, device: devName(), operator: opName() }; await DB.put('rounds', rd); }
     location.hash = '#/ronda/' + rd.id;
   };
   $$('tr[data-rd]').forEach(tr => tr.onclick = () => location.hash = '#/ronda/' + tr.dataset.rd);
@@ -1385,7 +1483,7 @@ async function vRound(id) {
     }).join('')}<span class="hint">mm/s · cambio vs ${fday(b.when)}</span></div>`;
   };
   view.innerHTML = crumbs([['#/', 'Rutas'], ['#/r/' + r.id, r.name], [null, 'Ronda ' + fday(rd.started)]]) + `
-    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}</div></div></div>
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}${whoTxt(rd) ? ' · ' + esc(whoTxt(rd)) : ''}</div></div></div>
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;font-size:13.5px;font-weight:600"><span>${nDone} de ${pts.length} puntos</span><span>${Math.round(100*nDone/Math.max(1, pts.length))} %</span></div>
       <div class="prog" style="display:block"><i style="width:${100*nDone/Math.max(1, pts.length)}%"></i></div>
@@ -1467,7 +1565,7 @@ async function vRound(id) {
     const orient = { z: $('#oZ').value, x: $('#oX').value };
     const meas = await runMeasure({ cfg: cur.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: cur.id, roundId: rd.id });
     if (!meas) return;
-    cur.orient = orient; await DB.put('points', cur);
+    cur.orient = orient; await DB.put('points', cur); await refreshPointLast(cur.id);
     const vmax = maxV(meas.overall), pv = maxV(prevMeas?.overall);
     items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null };
     await DB.put('rounds', rd);
@@ -1484,6 +1582,8 @@ const defaultMode = () => (matchMedia('(pointer:coarse)').matches ? 'operador' :
 const isOp = () => pref.get('mode', 'oficina') === 'operador';
 function applyMode() { document.body.classList.toggle('op', isOp()); }
 const devName = () => pref.get('device', '') || (isOp() ? 'movil' : 'oficina');
+const opName = () => pref.get('operator', '');
+const whoTxt = x => [x?.operator, x?.device].filter(Boolean).join(' · ');
 // Codificación compacta de los bloques (Int16 → base64)
 function i16ToB64(a) { const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return 'b64:' + btoa(s); }
 function b64ToI16(s) { const b = atob(s.slice(4)), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Int16Array(u.buffer); }
@@ -1531,21 +1631,30 @@ async function pendingData() {
 }
 async function buildData() {
   const { ms, rds } = await pendingData();
-  return { file: { app: 'vibra8531', kind: 'datos', schema: 3, exported: nowIso(), from: devName(),
+  return { file: { app: 'vibra8531', kind: 'datos', schema: 3, exported: nowIso(), from: devName(), operator: opName(),
                    measurements: ms.map(x => ({ ...x, dirs: packDirs(x.dirs) })), rounds: rds }, ms, rds };
 }
 async function markSent(ms) { for (const x of ms) { x.sent = nowIso(); await DB.put('measurements', x, false); } pref.set('lastSent', nowIso()); }
+async function getDevices() { try { return (await DB.get('kv', 'devices'))?.list || {}; } catch (e) { return {}; } }
+async function noteDevice(j, nm, nr) {
+  const list = await getDevices(), k = j.from || 'desconocido', d = list[k] || { name: k, nMeas: 0, nRounds: 0 };
+  d.operator = j.operator || d.operator || ''; d.lastExported = j.exported; d.lastImported = nowIso(); d.nMeas += nm; d.nRounds += nr;
+  list[k] = d; await DB.put('kv', { id: 'devices', list }, false);
+}
 async function importData(j) {
   if (j.app !== 'vibra8531' || j.kind !== 'datos') throw new Error('el archivo no contiene medidas de Vibra 8531');
   const pts = new Set((await DB.all('points')).map(x => x.id));
-  let nm = 0, orphan = 0;
+  let nm = 0, orphan = 0; const touched = new Set();
   for (const o of j.measurements || []) {
     if (await DB.get('measurements', o.id)) continue;
     o.dirs = unpackDirs(o.dirs); delete o.sent;
     if (o.pointId && !pts.has(o.pointId)) { o.note = (o.note ? o.note + ' · ' : '') + 'punto desconocido en la oficina'; o.pointId = null; orphan++; }
     await DB.put('measurements', o, false); nm++;
+    if (o.pointId) touched.add(o.pointId);
   }
   const nr = await mergeRecords('rounds', j.rounds);
+  for (const pid of touched) await refreshPointLast(pid);
+  await noteDevice(j, nm, nr);
   return { nm, nr, orphan };
 }
 async function updateSyncBadge() {
@@ -1603,6 +1712,10 @@ async function vSync() {
   const h = FS.ok() ? await FS.getHandle() : null;
   const granted = h ? await FS.perm(h, false) : false;
   const ls = pref.get('lastSync', null);
+  const devs = await getDevices(), allRoutes = await DB.all('routes');
+  for (const r of allRoutes) if (r.assignedTo && !devs[r.assignedTo]) devs[r.assignedTo] = { name: r.assignedTo };
+  const devRows = Object.values(devs).map(d => ({ ...d, routes: allRoutes.filter(r => r.assignedTo === d.name).map(r => r.name) })).sort((a, b) => (b.lastExported || '').localeCompare(a.lastExported || ''));
+  const unassigned = allRoutes.filter(r => !r.assignedTo).map(r => r.name);
   view.innerHTML = `
     <div class="titlebar"><div><h2>Sincronizar</h2><div class="sub">Intercambio con los móviles a través de una carpeta de OneDrive</div></div></div>
     <div class="grid two">
@@ -1631,6 +1744,13 @@ async function vSync() {
         </div>
       </div>
       <div class="col">
+        <div class="card">
+          <h3>Dispositivos</h3>
+          ${devRows.length ? `<div class="tw"><table><tr><th>Móvil</th><th>Operador</th><th>Último envío</th><th>Medidas</th><th>Rutas asignadas</th></tr>
+            ${devRows.map(d => `<tr><td><b>${esc(d.name)}</b></td><td>${esc(d.operator || '–')}</td><td>${d.lastExported ? fdate(d.lastExported) : '–'}</td><td>${d.nMeas ?? 0}</td><td style="white-space:normal">${esc(d.routes.join(', ') || '–')}</td></tr>`).join('')}</table></div>`
+            : '<p class="note" style="margin-top:0">Aparecerán aquí cuando los móviles envíen datos o les asignes rutas.</p>'}
+          ${unassigned.length ? `<p class="note">Rutas para todos los móviles: ${esc(unassigned.join(', '))}.</p>` : ''}
+        </div>
         <div class="card">
           <h3>Cómo funciona</h3>
           <ol style="margin:0;padding-left:18px;font-size:14px;line-height:1.55">
@@ -1669,9 +1789,18 @@ async function vSync() {
 }
 async function vSyncOp() {
   const { ms, rds } = await pendingData(), pi = pref.get('planInfo', null);
+  const needId = !pref.get('device', '') || !opName();
   const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.json', { type: 'application/json' })] }));
   view.innerHTML = `
     <div class="titlebar"><div><h2>Enviar y recibir</h2><div class="sub">Intercambio con la oficina a través de OneDrive</div></div></div>
+    ${needId ? `<div class="card" style="margin-bottom:12px;border-color:var(--warn)">
+      <h3>Identifícate</h3>
+      <div class="row">
+        <label class="field"><span>Tu nombre (operador)</span><input id="idOp" value="${esc(opName())}" placeholder="p. ej. Juan Pérez"></label>
+        <label class="field"><span>Nombre de este móvil</span><input id="idDev" value="${esc(pref.get('device', ''))}" placeholder="p. ej. movil-juan"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="pri" id="idSave">Guardar</button></div>
+      <p class="note">La oficina usa el nombre del móvil para asignarte rutas. Pídeles el nombre exacto.</p></div>` : ''}
     <div class="grid two">
       <div class="col">
         <div class="card" style="${ms.length ? 'border-color:var(--acc)' : ''}">
@@ -1693,7 +1822,13 @@ async function vSyncOp() {
         </div>
       </div>
     </div>`;
+  if ($('#idSave')) $('#idSave').onclick = () => {
+    const o = $('#idOp').value.trim(), d = $('#idDev').value.trim();
+    if (!o || !d) return alert('Rellena tu nombre y el nombre del móvil.');
+    pref.set('operator', o); pref.set('device', d); route();
+  };
   $('#bSend').onclick = async () => {
+    if (needId) return alert('Antes de enviar, indica tu nombre y el del móvil.');
     const { file, ms: list } = await buildData();
     const name = `vibra8531_${devName().replace(/\W+/g, '_')}_${stampFile()}.json`, text = JSON.stringify(file);
     try {
@@ -1734,7 +1869,11 @@ async function vSettings() {
           <h3>Modo de la app</h3>
           <div class="seg" id="modeSeg"><button data-m="oficina" class="${isOp() ? '' : 'on'}">Oficina</button><button data-m="operador" class="${isOp() ? 'on' : ''}">Operador</button></div>
           <p class="note">${isOp() ? '<b>Operador:</b> solo rutas, medida libre y envío de datos. La base de datos y las rutas llegan desde la oficina.' : '<b>Oficina:</b> base de datos, rutas, análisis y sincronización con la carpeta de OneDrive.'}</p>
-          <label class="field" style="margin-top:10px"><span>Nombre de este dispositivo</span><input id="devName" value="${esc(pref.get('device', ''))}" placeholder="p. ej. movil-patrullero"></label>
+          <div class="row" style="margin-top:10px">
+            <label class="field"><span>Operador</span><input id="opName" value="${esc(opName())}" placeholder="p. ej. Juan Pérez"></label>
+            <label class="field"><span>Nombre de este dispositivo</span><input id="devName" value="${esc(pref.get('device', ''))}" placeholder="p. ej. movil-juan"></label>
+          </div>
+          ${isOp() ? '<p class="note">La oficina asigna las rutas por el nombre del dispositivo: debe coincidir exactamente.</p>' : ''}
         </div>
         <div class="card">
           <h3>Sensor</h3>
@@ -1792,6 +1931,7 @@ async function vSettings() {
   if ($('#bStat')) $('#bStat').onclick = async () => { Sensor.lastStatus = await Sensor.status(); route(); };
   $('#quiet').onchange = () => pref.set('quiet', $('#quiet').checked);
   $('#devName').onchange = () => pref.set('device', $('#devName').value.trim());
+  $('#opName').onchange = () => pref.set('operator', $('#opName').value.trim());
   $$('#modeSeg button').forEach(b => b.onclick = () => {
     const m = b.dataset.m; if (m === pref.get('mode', 'oficina')) return;
     if (m === 'oficina' && !confirm('El modo Oficina permite editar la base de datos y las rutas. ¿Cambiar?')) return;
@@ -1840,6 +1980,7 @@ function openBackup(file) {
         o.dirs = Object.fromEntries(Object.entries(o.dirs).map(([d, bl]) => [d, bl.map(b => Int16Array.from(b))]));
         await DB.put('measurements', o, false); n++;
       }
+      for (const pt of await DB.all('points')) await refreshPointLast(pt.id);
       alert(`Copia abierta: ${(j.measurements || []).length} medidas en ${(j.plants || []).length} barcos.`);
       location.hash = '#/'; route();
     } catch (e) { alert('No se pudo abrir la copia: ' + e.message); }
@@ -1901,6 +2042,7 @@ async function makeSample() {
   await DB.put('routes', rt);
   await DB.put('rounds', { id: uid(), routeId: rt.id, started: new Date(Date.now() - 34*864e5).toISOString(), finished: new Date(Date.now() - 34*864e5 + 3600e3).toISOString(),
     items: { [pts[0].id]: { status: 'done', when: nowIso() }, [pts[1].id]: { status: 'done', when: nowIso() }, [p3.id]: { status: 'skip', reason: 'Máquina parada', when: nowIso() } } });
+  for (const pt of await DB.all('points')) await refreshPointLast(pt.id);
   log('Datos de ejemplo creados', 'ok');
 }
 
@@ -1946,6 +2088,7 @@ async function xOp(write, read) {
   try { await DB.open(); } catch (e) { view.innerHTML = `<div class="empty">No se pudo abrir la base de datos local: ${esc(e.message)}</div>`; return; }
   try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
   if (!pref.get('mode', null)) pref.set('mode', defaultMode());   // se decide una vez y se guarda
+  if (!isOp() && !pref.get('migLast', false)) { try { for (const pt of await DB.all('points')) await refreshPointLast(pt.id); pref.set('migLast', true); } catch (e) {} }
   applyMode(); setChip(); route();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(e => log('Modo sin conexión no disponible: ' + e.message, 'warn'));
 })();
