@@ -122,8 +122,9 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 </header>
 <main id="view"></main>
 <nav class="bottomnav">
-  <a href="#/" id="navA">Barcos</a>
-  <a href="#/libre" id="navL">Medida libre</a>
+  <a href="#/" id="navR">Rutas</a>
+  <a href="#/libre" id="navL">Libre</a>
+  <a href="#/bd" id="navA">Base de datos</a>
   <a href="#/ajustes" id="navS">Ajustes</a>
 </nav>
 <dialog id="dlg"></dialog>
@@ -179,15 +180,16 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '2.2';
+const APP_VERSION = '3.0';
 const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('vibra8531', 1);
+      const r = indexedDB.open('vibra8531', 2);
       r.onupgradeneeded = () => {
         const d = r.result;
-        for (const [n, idx] of [['plants', null], ['machines', 'plantId'], ['points', 'machineId'], ['measurements', 'pointId']]) {
+        for (const [n, idx] of [['plants', null], ['machines', 'plantId'], ['points', 'machineId'], ['measurements', 'pointId'], ['routes', 'plantId'], ['rounds', 'routeId']]) {
+          if (d.objectStoreNames.contains(n)) continue;
           const s = d.createObjectStore(n, { keyPath: 'id' }); if (idx) s.createIndex(idx, idx);
         }
       };
@@ -210,13 +212,20 @@ async function delMachineDeep(id) {
 }
 async function delPointDeep(id) {
   for (const m of await DB.by('measurements', 'pointId', id)) await DB.del('measurements', m.id);
+  for (const r of await DB.all('routes')) if (r.points.includes(id)) { r.points = r.points.filter(x => x !== id); await DB.put('routes', r); }
   await DB.del('points', id);
+}
+async function delRouteDeep(id) {
+  for (const rd of await DB.by('rounds', 'routeId', id)) await DB.del('rounds', rd.id);
+  await DB.del('routes', id);
 }
 async function delPlantDeep(id) {
   for (const m of await DB.by('machines', 'plantId', id)) await delMachineDeep(m.id);
+  for (const r of await DB.by('routes', 'plantId', id)) await delRouteDeep(r.id);
   await DB.del('plants', id);
 }
 const byWhen = (a, b) => (a.when < b.when ? 1 : -1);
+const STORES = ['plants','machines','points','measurements','routes','rounds'];
 
 /* =====================================================================
    Capa del sensor (TE 8531N, firmware 4.x)
@@ -644,18 +653,21 @@ function crumbs(parts) {
 let freeView = false;
 async function route() {
   const h = location.hash || '#/', [, kind, id] = h.split('/');
-  $('#navA').classList.toggle('act', !['ajustes','libre'].includes(kind) && !(kind === 'm' && freeView));
-  $('#navL').classList.toggle('act', kind === 'libre' || (kind === 'm' && freeView));
-  $('#navS').classList.toggle('act', kind === 'ajustes');
+  const sect = !kind || ['r','ronda'].includes(kind) ? 'R' : kind === 'libre' ? 'L' : kind === 'ajustes' ? 'S' : 'A';
+  for (const k of 'RLAS') $('#nav' + k).classList.toggle('act', sect === k);
+  if (kind === 'm' && freeView) { $('#navA').classList.remove('act'); $('#navL').classList.add('act'); }
   try {
-    if (!kind) await vPlants();
+    if (!kind) await vRoutes();
+    else if (kind === 'bd') await vPlants();
+    else if (kind === 'r') await vRoute(id);
+    else if (kind === 'ronda') await vRound(id);
     else if (kind === 'b') await vPlant(id);
     else if (kind === 'q') await vMachine(id);
     else if (kind === 'p') await vPoint(id);
     else if (kind === 'm') await vMeas(id);
     else if (kind === 'ajustes') await vSettings();
     else if (kind === 'libre') await vFree();
-    else await vPlants();
+    else await vRoutes();
   } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
   setChip();
 }
@@ -666,7 +678,7 @@ async function vPlants() {
   const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
   const machines = await DB.all('machines');
   view.innerHTML = `
-    <div class="titlebar"><div><h2>Barcos</h2><div class="sub">Plantas → máquinas → puntos de medida</div></div><span class="sp"></span><button class="pri" id="bNew">+ Barco</button></div>
+    <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="pri" id="bNew">+ Barco</button></div>
     <div class="list">${plants.length ? plants.map(p => {
       const n = machines.filter(m => m.plantId === p.id).length;
       return `<a class="item" href="#/b/${p.id}"><div class="m"><div class="t">${esc(p.name)}</div><div class="d">${esc(p.code || '')}${p.code ? ' · ' : ''}${n} máquina${n === 1 ? '' : 's'}</div></div><span class="chev">›</span></a>`;
@@ -692,10 +704,10 @@ const machineFields = m => [
   { k: 'iso', label: 'Clase ISO 10816-1', type: 'select', options: ISO_NAME.map((n, i) => [i, n]), def: 1 },
   { k: 'notes', label: 'Notas', type: 'textarea' }];
 async function vPlant(id) {
-  const p = await DB.get('plants', id); if (!p) { location.hash = '#/'; return; }
+  const p = await DB.get('plants', id); if (!p) { location.hash = '#/bd'; return; }
   const machines = (await DB.by('machines', 'plantId', id)).sort((a, b) => a.name.localeCompare(b.name));
   const points = await DB.all('points');
-  view.innerHTML = crumbs([['#/', 'Barcos'], [null, p.name]]) + `
+  view.innerHTML = crumbs([['#/bd', 'Base de datos'], [null, p.name]]) + `
     <div class="titlebar"><div><h2>${esc(p.name)}</h2><div class="sub">${esc(p.code || '')} ${esc(p.notes || '')}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
     <div class="titlebar"><h3 style="margin:0;font-size:15px">Máquinas</h3><span class="sp"></span><button class="pri" id="bNew">+ Máquina</button></div>
     <div class="list">${machines.length ? machines.map(m => {
@@ -704,7 +716,7 @@ async function vPlant(id) {
     }).join('') : '<div class="empty">Este barco aún no tiene máquinas.</div>'}</div>`;
   $('#bEdit').onclick = async () => {
     const v = await formDialog('Editar barco', [{ k: 'name', label: 'Nombre', req: true }, { k: 'code', label: 'IMO / identificador' }, { k: 'notes', label: 'Notas', type: 'textarea' }], p, { danger: 'Borrar barco' });
-    if (v === '__delete') { if (confirmDel(`el barco «${p.name}» con todas sus máquinas, puntos y medidas`)) { await delPlantDeep(p.id); location.hash = '#/'; } return; }
+    if (v === '__delete') { if (confirmDel(`el barco «${p.name}» con todas sus máquinas, puntos y medidas`)) { await delPlantDeep(p.id); location.hash = '#/bd'; } return; }
     if (v) { Object.assign(p, v); await DB.put('plants', p); route(); }
   };
   $('#bNew').onclick = async () => {
@@ -734,7 +746,7 @@ async function vMachine(id) {
   const pts = (await DB.by('points', 'machineId', id)).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
   const last = {};
   for (const pt of pts) { const ms = await DB.by('measurements', 'pointId', pt.id); ms.sort(byWhen); last[pt.id] = { n: ms.length, m: ms[0] }; }
-  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
+  view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
     <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
     <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri" id="bNew">+ Punto</button></div>
     <div class="list">${pts.length ? pts.map(pt => {
@@ -776,7 +788,7 @@ async function vPoint(id) {
   const locked = ms.length > 0, cfg = pt.cfg, o = pt.orient || orientDefault;
   const lastRpm = ms[0]?.rpm ?? m.rpm, lastLoad = ms[0]?.load ?? '';
   const nax = 3, per = 4096/MODES[cfg.mode] + (pref.get('quiet', true) ? 9 : 5);
-  view.innerHTML = crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
+  view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
       <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
       <span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
@@ -855,10 +867,10 @@ function bindOrient(o) {
   $('#oZ').onchange = fillX; $('#oX').onchange = fillX; fillX();
 }
 /* Mide los 3 ejes con la configuración dada y guarda la medida (pointId null = medida libre) */
-async function runMeasure({ cfg, orient, rpm, load, note, pointId }) {
+async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const om = orientMap(orient), fs = MODES[cfg.mode], quiet = pref.get('quiet', true), block = pref.get('blk', 120);
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
-  const meas = { id: uid(), pointId: pointId || null, when: nowIso(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
+  const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
                  cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
   const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
   const total = 3*cfg.navg; let step = 0;
@@ -1061,7 +1073,7 @@ function getSpec(meas, d) {
 async function vMeas(id) {
   const ms = await DB.get('measurements', id); if (!ms) { location.hash = '#/'; return; }
   const free = !ms.pointId; freeView = free;
-  $('#navA').classList.toggle('act', !free); $('#navL').classList.toggle('act', free);
+  if (free) { for (const k of 'RAS') $('#nav' + k).classList.remove('act'); $('#navL').classList.add('act'); }
   const pt = free ? null : await DB.get('points', ms.pointId), m = free ? { iso: pref.get('freeIso', 1) } : await DB.get('machines', pt.machineId), p = free ? null : await DB.get('plants', m.plantId);
   const sibs = (free ? (await DB.all('measurements')).filter(x => !x.pointId) : await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
   const dirsHere = DIRS.filter(d => ms.dirs[d]?.length);
@@ -1070,7 +1082,7 @@ async function vMeas(id) {
   const f1 = ms.rpm > 0 ? ms.rpm/60 : 0, cls = m.iso ?? 1, fmax = ms.cfg.fs/2.56;
   const i = sibs.findIndex(s => s.id === ms.id), prev = sibs[i+1], next = sibs[i-1];
   view.innerHTML = (free ? crumbs([['#/libre', 'Medida libre'], [null, fdate(ms.when)]])
-      : crumbs([['#/', 'Barcos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]])) + `
+      : crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]])) + `
     ${free ? `<div class="card" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-color:var(--acc)">
       <div style="flex:1;min-width:200px"><b>Medida libre</b><div class="hint">No está asignada a ningún punto. Guárdala si quieres conservarla en el historial de una máquina.</div></div>
       <button class="pri" id="bSaveTo">Guardar en un punto…</button></div>` : ''}
@@ -1173,12 +1185,287 @@ async function vMeas(id) {
   render();
 }
 
+
+/* =====================================================================
+   Rutas y rondas
+   ===================================================================== */
+const DAY = 864e5;
+const PERIODS = [[7,'Semanal'],[14,'Quincenal'],[30,'Mensual'],[60,'Bimestral'],[90,'Trimestral'],[180,'Semestral'],[365,'Anual']];
+const periodName = d => (PERIODS.find(p => p[0] === d) || [0, `Cada ${d} días`])[1];
+async function routeState(r) {
+  const rounds = (await DB.by('rounds', 'routeId', r.id)).sort((a, b) => (a.started < b.started ? 1 : -1));
+  const open = rounds.find(x => !x.finished), lastDone = rounds.find(x => x.finished);
+  const due = lastDone ? Date.parse(lastDone.finished) + r.period*DAY : null;
+  const days = due == null ? null : Math.ceil((due - Date.now())/DAY);
+  let st;
+  if (open) st = { cls: '--acc2', txt: 'En curso' };
+  else if (!lastDone) st = { cls: '--warn', txt: 'Nunca realizada' };
+  else if (days < 0) st = { cls: '--err', txt: `Vencida hace ${-days} día${days === -1 ? '' : 's'}` };
+  else if (days <= Math.max(2, Math.round(r.period*0.15))) st = { cls: '--warn', txt: days === 0 ? 'Vence hoy' : `Vence en ${days} día${days === 1 ? '' : 's'}` };
+  else st = { cls: '--ok', txt: `Al día · próxima ${new Date(due).toLocaleDateString([], { day: 'numeric', month: 'short' })}` };
+  return { rounds, open, lastDone, due, days, st };
+}
+const roundProgress = (rd, r) => { const done = r.points.filter(id => rd.items?.[id]).length; return { done, total: r.points.length }; };
+const stTag = st => `<span class="tag" style="background:color-mix(in srgb,var(${st.cls}) 16%,transparent);color:var(${st.cls})">${esc(st.txt)}</span>`;
+
+/* ---------------- Lista de rutas (pantalla del operador) ---------------- */
+async function vRoutes() {
+  const routes = await DB.all('routes'), plants = await DB.all('plants');
+  const rows = [];
+  for (const r of routes) rows.push({ r, s: await routeState(r), p: plants.find(x => x.id === r.plantId) });
+  const rank = x => x.s.open ? 0 : x.s.days == null ? 1 : x.s.days < 0 ? 2 : 3;
+  rows.sort((a, b) => rank(a) - rank(b) || (a.s.days ?? 0) - (b.s.days ?? 0) || a.r.name.localeCompare(b.r.name));
+  view.innerHTML = `
+    <div class="titlebar"><div><h2>Rutas</h2><div class="sub">Tareas programadas de medida</div></div><span class="sp"></span>${plants.length ? '<button class="pri" id="bNew">+ Ruta</button>' : ''}</div>
+    <div class="list">${rows.length ? rows.map(({ r, s: st, p }) => {
+      const pr = st.open ? roundProgress(st.open, r) : null;
+      return `<a class="item" href="#/r/${r.id}"><div class="m">
+        <div class="t">${esc(r.name)}</div>
+        <div class="d">${esc(p?.name || '¿barco borrado?')} · ${r.points.length} punto${r.points.length === 1 ? '' : 's'} · ${periodName(r.period)}${st.lastDone ? ' · última ' + fday(st.lastDone.finished) : ''}</div>
+        <div style="margin-top:6px">${stTag(st.st)}${pr ? ` <span class="hint">${pr.done}/${pr.total} puntos</span>` : ''}</div>
+      </div><span class="chev">›</span></a>`;
+    }).join('') : `<div class="empty">${plants.length
+        ? 'Aún no hay rutas. Una ruta es una lista ordenada de puntos que se mide periódicamente.<br><br><button class="pri" id="bNew2">Crear la primera ruta</button>'
+        : 'Primero crea en <a href="#/bd">Base de datos</a> los barcos, máquinas y puntos.<br><span class="hint">o carga unos datos de ejemplo en Ajustes</span>'}</div>`}</div>`;
+  const nb = () => editRoute(null);
+  if ($('#bNew')) $('#bNew').onclick = nb; if ($('#bNew2')) $('#bNew2').onclick = nb;
+}
+
+/* ---------------- Editor de ruta ---------------- */
+async function editRoute(r) {
+  const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
+  const machines = await DB.all('machines'), points = await DB.all('points');
+  let sel = r ? [...r.points] : [];
+  return new Promise(resolve => {
+    const d = $('#dlg');
+    d.innerHTML = `<form method="dialog">
+      <h4>${r ? 'Editar ruta' : 'Nueva ruta'}</h4>
+      <label class="field"><span>Nombre *</span><input id="rName" required value="${esc(r?.name || '')}" placeholder="p. ej. Cámara de máquinas · mensual"></label>
+      <div class="row">
+        <label class="field"><span>Barco</span><select id="rPlant" ${r ? 'disabled' : ''}>${plants.map(p => `<option value="${p.id}" ${r?.plantId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Periodicidad</span><select id="rPer">${PERIODS.map(([v, n]) => `<option value="${v}" ${(r?.period ?? 30) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      </div>
+      <label class="field"><span>Instrucciones para el operador</span><textarea id="rDesc" placeholder="p. ej. medir con la máquina en servicio normal">${esc(r?.description || '')}</textarea></label>
+      <div class="field"><span>Puntos, en orden de recorrido</span><div id="rSel" class="list"></div></div>
+      <div class="field"><span>Añadir puntos</span><div id="rAvail"></div></div>
+      <div class="acts">${r ? '<button type="button" class="danger" id="rDel" style="margin-right:auto">Borrar ruta</button>' : ''}<button type="button" id="rCancel">Cancelar</button><button class="pri">Guardar</button></div>
+    </form>`;
+    const ptLabel = id => { const pt = points.find(x => x.id === id), m = machines.find(x => x.id === pt?.machineId); return pt ? `${esc(m?.name || '')} › ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}` : '?'; };
+    const draw = () => {
+      const pid = $('#rPlant').value;
+      $('#rSel').innerHTML = sel.length ? sel.map((id, i) => `<div class="item" style="cursor:default;padding:8px 10px">
+          <b style="width:22px">${i+1}</b><div class="m" style="font-size:13.5px">${ptLabel(id)}</div>
+          <button type="button" class="sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button type="button" class="sm" data-dn="${i}" ${i < sel.length-1 ? '' : 'disabled'}>↓</button><button type="button" class="sm danger" data-rm="${i}">✕</button></div>`).join('')
+        : '<div class="hint">Ningún punto todavía. Añádelos abajo.</div>';
+      const ms_ = machines.filter(m => m.plantId === pid).sort((a, b) => a.name.localeCompare(b.name));
+      $('#rAvail').innerHTML = ms_.length ? ms_.map(m => {
+        const pts = points.filter(x => x.machineId === m.id && !sel.includes(x.id)).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
+        if (!pts.length) return '';
+        return `<div style="margin:6px 0"><div style="display:flex;align-items:center;gap:8px"><b style="font-size:13.5px;flex:1">${esc(m.name)}</b><button type="button" class="sm" data-addm="${m.id}">+ todos</button></div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${pts.map(pt => `<button type="button" class="sm" data-add="${pt.id}">+ ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</button>`).join('')}</div></div>`;
+      }).join('') || '<div class="hint">Todos los puntos de este barco están ya en la ruta.</div>'
+        : '<div class="hint">Este barco no tiene máquinas con puntos. Créalos en Base de datos.</div>';
+      $$('#rSel [data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; [sel[i-1], sel[i]] = [sel[i], sel[i-1]]; draw(); });
+      $$('#rSel [data-dn]').forEach(b => b.onclick = () => { const i = +b.dataset.dn; [sel[i+1], sel[i]] = [sel[i], sel[i+1]]; draw(); });
+      $$('#rSel [data-rm]').forEach(b => b.onclick = () => { sel.splice(+b.dataset.rm, 1); draw(); });
+      $$('#rAvail [data-add]').forEach(b => b.onclick = () => { sel.push(b.dataset.add); draw(); });
+      $$('#rAvail [data-addm]').forEach(b => b.onclick = () => { points.filter(x => x.machineId === b.dataset.addm && !sel.includes(x.id)).sort((a, c) => (a.code || a.name).localeCompare(c.code || c.name)).forEach(x => sel.push(x.id)); draw(); });
+    };
+    $('#rPlant').onchange = () => { sel = []; draw(); };
+    draw();
+    let done = false;
+    const finish = v => { if (done) return; done = true; d.close(); resolve(v); };
+    $('#rCancel').onclick = () => finish(null);
+    d.onclose = () => finish(null);
+    if (r) $('#rDel').onclick = async () => { if (confirmDel(`la ruta «${r.name}» y su historial de rondas (las medidas se conservan en sus puntos)`)) { await delRouteDeep(r.id); finish('del'); location.hash = '#/'; } };
+    d.querySelector('form').onsubmit = async e => {
+      e.preventDefault();
+      if (!$('#rName').value.trim()) return;
+      if (!sel.length) return alert('Añade al menos un punto a la ruta.');
+      const o = r || { id: uid(), created: nowIso(), plantId: $('#rPlant').value };
+      Object.assign(o, { name: $('#rName').value.trim(), period: +$('#rPer').value, description: $('#rDesc').value.trim(), points: sel });
+      await DB.put('routes', o);
+      finish(o.id); location.hash = '#/r/' + o.id; route();
+    };
+    d.showModal();
+  });
+}
+
+/* ---------------- Detalle de ruta ---------------- */
+async function vRoute(id) {
+  const r = await DB.get('routes', id); if (!r) { location.hash = '#/'; return; }
+  const p = await DB.get('plants', r.plantId), machines = await DB.all('machines'), points = await DB.all('points');
+  const st = await routeState(r);
+  const pr = st.open ? roundProgress(st.open, r) : null;
+  const lastByPt = {};
+  for (const pid of r.points) { const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen); lastByPt[pid] = ms[0]; }
+  view.innerHTML = crumbs([['#/', 'Rutas'], [null, r.name]]) + `
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ${periodName(r.period)} · ${r.points.length} puntos</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Estado</h3>
+          <div>${stTag(st.st)}</div>
+          ${st.lastDone ? `<p class="note">Última ronda completada: ${fdate(st.lastDone.finished)}.</p>` : ''}
+          ${r.description ? `<p class="note" style="color:var(--fg)">${esc(r.description)}</p>` : ''}
+          <div style="margin-top:14px">${st.open
+            ? `<button class="pri big" id="bGo">Continuar ronda · ${pr.done}/${pr.total}</button>`
+            : `<button class="pri big" id="bGo">Empezar ronda</button>`}</div>
+        </div>
+        <div class="card">
+          <h3>Historial de rondas</h3>
+          ${st.rounds.length ? `<div class="tw"><table><tr><th>Inicio</th><th>Fin</th><th>Medidos</th><th>Saltados</th></tr>
+            ${st.rounds.map(x => { const it = Object.values(x.items || {}); return `<tr class="clk" data-rd="${x.id}"><td>${fdate(x.started)}</td><td>${x.finished ? fdate(x.finished) : '<span class="tag">en curso</span>'}</td><td>${it.filter(i => i.status === 'done').length}</td><td>${it.filter(i => i.status === 'skip').length}</td></tr>`; }).join('')}</table></div>`
+            : '<div class="hint">Todavía no se ha realizado ninguna ronda.</div>'}
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Puntos de la ruta</h3>
+          <div class="list">${r.points.map((pid, i) => {
+            const pt = points.find(x => x.id === pid), m = machines.find(x => x.id === pt?.machineId), last = lastByPt[pid], ov = last?.overall;
+            return `<a class="item" href="#/p/${pid}"><b style="width:22px">${i+1}</b><div class="m"><div class="t">${esc(m?.name || '')} › ${pt?.code ? esc(pt.code) + ' · ' : ''}${esc(pt?.name || '?')}</div>
+              <div class="d">${last ? 'última medida ' + fday(last.when) : 'sin medidas'}</div>
+              ${ov ? `<div class="dirs" style="margin-top:4px">${DIRS.filter(d => ov[d]).map(d => `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(ov[d].v)}</b></span>`).join('')}<span class="hint">mm/s</span> ${zoneTag(maxV(ov), m?.iso)}</div>` : ''}</div><span class="chev">›</span></a>`;
+          }).join('')}</div>
+        </div>
+      </div>
+    </div>`;
+  $('#bEdit').onclick = () => editRoute(r);
+  $('#bGo').onclick = async () => {
+    let rd = st.open;
+    if (!rd) { rd = { id: uid(), routeId: r.id, started: nowIso(), finished: null, items: {} }; await DB.put('rounds', rd); }
+    location.hash = '#/ronda/' + rd.id;
+  };
+  $$('tr[data-rd]').forEach(tr => tr.onclick = () => location.hash = '#/ronda/' + tr.dataset.rd);
+}
+
+/* ---------------- Ejecución de una ronda ---------------- */
+let roundCursor = {};   // roundId -> pointId seleccionado
+async function vRound(id) {
+  const rd = await DB.get('rounds', id); if (!rd) { location.hash = '#/'; return; }
+  const r = await DB.get('routes', rd.routeId), p = await DB.get('plants', r.plantId);
+  const machines = await DB.all('machines'), points = await DB.all('points');
+  const pts = r.points.map(pid => points.find(x => x.id === pid)).filter(Boolean);
+  const items = rd.items || (rd.items = {});
+  const pending = pts.filter(pt => !items[pt.id]);
+  const nDone = pts.length - pending.length;
+  let curId = roundCursor[rd.id];
+  if (!curId || !pts.some(x => x.id === curId)) curId = (pending[0] || pts[0])?.id;
+  const cur = pts.find(x => x.id === curId), mach = machines.find(x => x.id === cur?.machineId);
+  const it = items[curId];
+  // medidas del punto (anterior a esta ronda)
+  const hist = cur ? (await DB.by('measurements', 'pointId', cur.id)).sort(byWhen) : [];
+  const thisMeas = it?.measId ? hist.find(x => x.id === it.measId) : null;
+  const prevMeas = hist.find(x => x.id !== it?.measId && (!thisMeas || x.when < thisMeas.when));
+  // rpm y carga sugeridas: otra medida de la misma máquina en esta ronda, si no la última del punto, si no la nominal
+  let sugRpm = mach?.rpm ?? '', sugLoad = '';
+  const sameMach = Object.entries(items).filter(([pid, v]) => v.status === 'done' && points.find(x => x.id === pid)?.machineId === cur?.machineId).map(([, v]) => v);
+  if (sameMach.length) { const last = sameMach.sort((a, b) => (a.when < b.when ? 1 : -1))[0]; sugRpm = last.rpm ?? sugRpm; sugLoad = last.load ?? ''; }
+  else if (hist[0]) { sugRpm = hist[0].rpm ?? sugRpm; sugLoad = hist[0].load ?? ''; }
+  const o = cur?.orient || orientDefault, finished = !!rd.finished;
+  const deltaHtml = (a, b) => {
+    if (!a || !b) return '';
+    return `<div class="dirs" style="margin-top:6px">${DIRS.filter(d => a.overall?.[d]).map(d => {
+      const v = a.overall[d].v, pv = b.overall?.[d]?.v, ch = pv > 0 ? 100*(v/pv - 1) : null;
+      const col = ch == null ? '--muted' : ch >= 50 ? '--err' : ch >= 25 ? '--warn' : '--ok';
+      return `<span><span class="dot" style="background:var(${DCOL[d]})"></span>${d} <b>${fmt(v)}</b>${ch != null ? ` <span style="color:var(${col});font-weight:700">${ch >= 0 ? '+' : ''}${Math.round(ch)} %</span>` : ''}</span>`;
+    }).join('')}<span class="hint">mm/s · cambio vs ${fday(b.when)}</span></div>`;
+  };
+  view.innerHTML = crumbs([['#/', 'Rutas'], ['#/r/' + r.id, r.name], [null, 'Ronda ' + fday(rd.started)]]) + `
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}</div></div></div>
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:13.5px;font-weight:600"><span>${nDone} de ${pts.length} puntos</span><span>${Math.round(100*nDone/Math.max(1, pts.length))} %</span></div>
+      <div class="prog" style="display:block"><i style="width:${100*nDone/Math.max(1, pts.length)}%"></i></div>
+    </div>
+    <div class="grid two">
+      <div class="col">
+        ${cur ? `<div class="card" style="border-color:var(--acc)">
+          <h3>Punto ${pts.indexOf(cur)+1} de ${pts.length}<span class="sp"></span>${it ? (it.status === 'done' ? '<span class="tag" style="color:var(--ok)">✓ medido</span>' : '<span class="tag" style="color:var(--warn)">saltado</span>') : ''}</h3>
+          <div style="font-size:19px;font-weight:700;line-height:1.25">${esc(mach?.name || '')}</div>
+          <div style="font-size:16px;margin-top:2px">${cur.code ? '<b>' + esc(cur.code) + '</b> · ' : ''}${esc(cur.name)}</div>
+          <div class="hint" style="margin-top:4px">${esc(mach?.location || '')}${mach?.location ? ' · ' : ''}${esc(modeLabel(cur.cfg.mode))} · ${cur.cfg.navg} prom.</div>
+          ${cur.notes ? `<p class="note" style="color:var(--fg)">${esc(cur.notes)}</p>` : ''}
+          ${it?.status === 'done' && thisMeas ? `<div style="margin-top:12px">${deltaHtml(thisMeas, prevMeas)}</div>
+              <div class="row" style="margin-top:12px"><button class="sm" type="button" onclick="location.hash='#/m/${thisMeas.id}'">Ver medida</button>${!finished ? '<button class="sm" id="bRedo">Repetir</button>' : ''}</div>`
+            : it?.status === 'skip' ? `<p class="note">Saltado: <b>${esc(it.reason)}</b>${it.comment ? ' · ' + esc(it.comment) : ''}</p>${!finished ? '<button class="sm" id="bRedo">Medir ahora</button>' : ''}` : ''}
+          ${!it && !finished ? `
+            <div class="row" style="margin-top:12px">
+              <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="mRpm" inputmode="decimal" min="1" step="any" value="${sugRpm}"></label>
+              <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${sugLoad}" placeholder="0–100"></label>
+            </div>
+            ${orientHTML(o)}
+            <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional"></label>
+            <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
+            <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
+            <div class="row" style="margin-top:6px"><button class="sm" id="bSkip">Saltar punto…</button></div>` : ''}
+          ${it && !finished && pending.length ? `<div style="margin-top:14px"><button class="pri big" id="bNext">Siguiente punto ›</button></div>` : ''}
+          ${!finished && !pending.length ? `<div style="margin-top:14px"><button class="pri big" id="bFinish">Finalizar ronda</button></div>` : ''}
+        </div>` : '<div class="empty">Esta ruta no tiene puntos.</div>'}
+        ${!finished && pending.length && nDone ? '<div><button class="sm" id="bFinishEarly">Finalizar ronda sin completar…</button></div>' : ''}
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Recorrido</h3>
+          <div class="list">${pts.map((pt, i) => {
+            const m = machines.find(x => x.id === pt.machineId), x = items[pt.id];
+            const icon = x?.status === 'done' ? '<span style="color:var(--ok);font-weight:800">✓</span>' : x?.status === 'skip' ? '<span style="color:var(--warn);font-weight:800">⤼</span>' : `<b>${i+1}</b>`;
+            return `<div class="item" data-go="${pt.id}" style="${pt.id === curId ? 'border-color:var(--acc);' : ''}padding:10px 12px"><span style="width:22px;text-align:center">${icon}</span>
+              <div class="m"><div class="t" style="font-size:14px">${esc(m?.name || '')} › ${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
+              ${x?.status === 'done' ? `<div class="d">${fmt(x.vmax)} mm/s máx.${x.change != null ? ` · <span style="color:var(${x.change >= 50 ? '--err' : x.change >= 25 ? '--warn' : '--ok'})">${x.change >= 0 ? '+' : ''}${Math.round(x.change)} %</span>` : ''}</div>` : x?.status === 'skip' ? `<div class="d">Saltado: ${esc(x.reason)}</div>` : ''}</div></div>`;
+          }).join('')}</div>
+          <p class="note">Toca un punto para ir a él. El cambio en % es la velocidad global máxima respecto a la medida anterior del punto.</p>
+        </div>
+      </div>
+    </div>`;
+  if (cur && !it && !finished) bindOrient(o);
+  $$('[data-go]').forEach(el => el.onclick = () => { roundCursor[rd.id] = el.dataset.go; route(); });
+  const goNext = () => {
+    const idx = pts.findIndex(x => x.id === curId);
+    const nxt = pts.slice(idx + 1).find(x => !items[x.id]) || pts.find(x => !items[x.id]);
+    roundCursor[rd.id] = nxt?.id || curId; route(); window.scrollTo(0, 0);
+  };
+  if ($('#bNext')) $('#bNext').onclick = goNext;
+  if ($('#bRedo')) $('#bRedo').onclick = async () => { delete items[curId]; await DB.put('rounds', rd); route(); };
+  const finishRound = async () => { rd.finished = nowIso(); await DB.put('rounds', rd); log(`Ronda «${r.name}» finalizada`, 'ok'); route(); };
+  if ($('#bFinish')) $('#bFinish').onclick = finishRound;
+  if ($('#bFinishEarly')) $('#bFinishEarly').onclick = async () => {
+    if (!confirm(`Quedan ${pending.length} puntos sin medir. ¿Finalizar la ronda igualmente? Se marcarán como saltados.`)) return;
+    for (const pt of pending) items[pt.id] = { status: 'skip', reason: 'No realizado', when: nowIso() };
+    await finishRound();
+  };
+  if ($('#bSkip')) $('#bSkip').onclick = async () => {
+    const v = await formDialog('Saltar punto', [
+      { k: 'reason', label: 'Motivo', type: 'select', options: ['Máquina parada','Inaccesible','Fuera de servicio / en reparación','Condiciones no representativas','Otro'].map(x => [x, x]) },
+      { k: 'comment', label: 'Comentario' }], {}, { okText: 'Saltar' });
+    if (!v) return;
+    items[curId] = { status: 'skip', reason: v.reason, comment: v.comment, when: nowIso() };
+    await DB.put('rounds', rd); goNext();
+  };
+  setChip();
+  if ($('#bMeas')) $('#bMeas').onclick = async () => {
+    if (busy || !Sensor.connected()) return;
+    const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
+    if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
+    if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
+    const orient = { z: $('#oZ').value, x: $('#oX').value };
+    const meas = await runMeasure({ cfg: cur.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: cur.id, roundId: rd.id });
+    if (!meas) return;
+    cur.orient = orient; await DB.put('points', cur);
+    const vmax = maxV(meas.overall), pv = maxV(prevMeas?.overall);
+    items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null };
+    await DB.put('rounds', rd);
+    roundCursor[rd.id] = cur.id;   // quedarse en el punto para ver el resultado
+    route(); window.scrollTo(0, 0);
+  };
+}
+
 /* ---------------- Ajustes ---------------- */
 async function vSettings() {
   const st = Sensor.lastStatus || {}, inf = Sensor.info || {};
   let usage = '';
   try { const e = await navigator.storage.estimate(); usage = `${(e.usage/1048576).toFixed(1)} MB usados`; } catch (e) {}
-  const counts = await Promise.all(['plants','machines','points','measurements'].map(s => DB.all(s).then(a => a.length)));
+  const counts = await Promise.all(STORES.map(s => DB.all(s).then(a => a.length)));
   view.innerHTML = `
     <div class="titlebar"><h2>Ajustes</h2><span class="sp"></span><span class="hint">Versión ${APP_VERSION}</span></div>
     <div class="grid two">
@@ -1205,7 +1492,7 @@ async function vSettings() {
         </div>
         <div class="card">
           <h3>Datos</h3>
-          <div class="kv"><span>Barcos</span><span>${counts[0]}</span><span>Máquinas</span><span>${counts[1]}</span><span>Puntos</span><span>${counts[2]}</span><span>Medidas</span><span>${counts[3]}</span>${usage ? `<span>Almacenamiento</span><span>${usage}</span>` : ''}</div>
+          <div class="kv"><span>Barcos</span><span>${counts[0]}</span><span>Máquinas</span><span>${counts[1]}</span><span>Puntos</span><span>${counts[2]}</span><span>Medidas</span><span>${counts[3]}</span><span>Rutas</span><span>${counts[4]}</span><span>Rondas</span><span>${counts[5]}</span>${usage ? `<span>Almacenamiento</span><span>${usage}</span>` : ''}</div>
           <div class="row" style="margin-top:12px">
             <button class="pri" id="bSave">Guardar copia (.json)</button>
             <button id="bOpen">Abrir copia…</button>
@@ -1246,7 +1533,7 @@ async function vSettings() {
   $('#bWipe').onclick = async () => {
     if (!confirm('¿Borrar TODOS los barcos, máquinas, puntos y medidas de este dispositivo?')) return;
     if (prompt('Escribe BORRAR para confirmar') !== 'BORRAR') return;
-    for (const s of ['plants','machines','points','measurements']) await DB.clear(s);
+    for (const s of STORES) await DB.clear(s);
     route();
   };
   $('#bDiag').onclick = listSvcs; $('#bDump').onclick = dumpAll;
@@ -1262,8 +1549,8 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 }
 async function saveBackup() {
-  const [plants, machines, points, measurements] = await Promise.all(['plants','machines','points','measurements'].map(s => DB.all(s)));
-  const out = { app: 'vibra8531', schema: 1, exported: nowIso(), plants, machines, points,
+  const [plants, machines, points, measurements, routes, rounds] = await Promise.all(STORES.map(s => DB.all(s)));
+  const out = { app: 'vibra8531', schema: 2, exported: nowIso(), plants, machines, points, routes, rounds,
     measurements: measurements.map(x => ({ ...x, dirs: Object.fromEntries(Object.entries(x.dirs).map(([d, bl]) => [d, bl.map(b => Array.from(b))])) })) };
   download(`vibra8531_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(out), 'application/json');
   log(`Copia guardada: ${plants.length} barcos, ${measurements.length} medidas`, 'ok');
@@ -1275,7 +1562,7 @@ function openBackup(file) {
       const j = JSON.parse(rd.result);
       if (j.app !== 'vibra8531') throw new Error('no es una copia de Vibra 8531');
       let n = 0;
-      for (const s of ['plants','machines','points']) for (const o of j[s] || []) { await DB.put(s, o, false); n++; }
+      for (const s of ['plants','machines','points','routes','rounds']) for (const o of j[s] || []) { await DB.put(s, o, false); n++; }
       for (const o of j.measurements || []) {
         o.dirs = Object.fromEntries(Object.entries(o.dirs).map(([d, bl]) => [d, bl.map(b => Int16Array.from(b))]));
         await DB.put('measurements', o, false); n++;
@@ -1333,6 +1620,14 @@ async function makeSample() {
       await DB.put('measurements', meas, false);
     }
   }
+  const m2 = { id: uid(), plantId: p.id, created: nowIso(), name: 'Ventilador sala de máquinas', type: 'Ventilador', location: 'Cubierta 2, popa', rpm: 1450, kw: 11, iso: 0, notes: '' };
+  await DB.put('machines', m2);
+  const p3 = { id: uid(), machineId: m2.id, created: nowIso(), name: 'Motor lado libre', code: 'V1', cfg: { mode: 1, navg: 1, win: 1 }, orient: { z: 'V', x: 'H' } };
+  await DB.put('points', p3);
+  const rt = { id: uid(), plantId: p.id, created: nowIso(), name: 'Cámara de máquinas · mensual', period: 30, description: 'Medir con las máquinas en servicio normal, tras al menos 15 min funcionando.', points: [pts[0].id, pts[1].id, p3.id] };
+  await DB.put('routes', rt);
+  await DB.put('rounds', { id: uid(), routeId: rt.id, started: new Date(Date.now() - 34*864e5).toISOString(), finished: new Date(Date.now() - 34*864e5 + 3600e3).toISOString(),
+    items: { [pts[0].id]: { status: 'done', when: nowIso() }, [pts[1].id]: { status: 'done', when: nowIso() }, [p3.id]: { status: 'skip', reason: 'Máquina parada', when: nowIso() } } });
   log('Datos de ejemplo creados', 'ok');
 }
 
