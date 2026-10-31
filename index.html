@@ -237,7 +237,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.6';
+const APP_VERSION = '3.7';
 const DB = {
   db: null,
   open() {
@@ -425,20 +425,44 @@ const Sensor = {
     }
     throw new Error('No se pudo reconectar con el sensor');
   },
-  async download(code, block=120, onProg=()=>{}) {
+  notifyMode: undefined,   // undefined = sin comprobar, true = el sensor envía los bloques por notificación, false = no
+  async _armNotify() {
+    if (this.notifyMode === false) return null;
+    const ch = await this.q(() => this.op(() => this.getChr('DA00','DA03')));
+    if (!ch.properties.notify) { this.notifyMode = false; return null; }
+    if (this._nch !== ch) {
+      ch.addEventListener('characteristicvaluechanged', e => { const w = this._waiter; if (w) w(e.target.value); });
+      this._nch = ch;
+      try { await this.q(() => ch.startNotifications()); } catch (e) { this.notifyMode = false; return null; }
+    }
+    return ch;
+  },
+  async download(code, block=120, onProg=()=>{}, maxTries=40) {
     const out = new Int16Array(N_TIME);
     let idx = 0, tries = 0;
+    await this._armNotify().catch(() => {});
     while (idx < N_TIME) {
-      const len = Math.min(block, N_TIME - idx);
+      const len = Math.min(block, N_TIME - idx), want = idx;
       const dv = await this.q(() => this.op(async () => {
         const ch = await this.getChr('DA00','DA03');
+        if (this.notifyMode !== false && this._nch === ch) {
+          const got = new Promise(res => { this._waiter = res; setTimeout(() => res(null), this.notifyMode ? 700 : 350); });
+          await this._w(ch, [code, idx >> 8, idx & 255, len]);
+          const v = await got; this._waiter = null;
+          if (v && v.byteLength > 4 && v.getUint16(1, false) === want) {
+            if (this.notifyMode === undefined) { this.notifyMode = true; log('Descarga por notificaciones activada', 'ok'); }
+            return v;
+          }
+          if (this.notifyMode === undefined && v === null) { this.notifyMode = false; log('El sensor no envía los datos por notificación; se usa lectura'); }
+          return ch.readValue();
+        }
         await this._w(ch, [code, idx >> 8, idx & 255, len]);
         return ch.readValue();
       }));
       const n = Math.min(len, (dv.byteLength - 4) >> 1);
       const rIdx = dv.byteLength >= 3 ? dv.getUint16(1,false) : -1;
       if (n <= 0 || rIdx !== idx) {
-        if (++tries < 40) { await sleep(n <= 0 ? 300 : 100); continue; }
+        if (++tries < maxTries) { await sleep(n <= 0 ? 300 : 100); continue; }
         throw new Error(`El sensor no entrega datos (canal ${code}, respuesta ${hex(dv)})`);
       }
       tries = 0;
@@ -1234,7 +1258,12 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
   const meas = { id: uid(), pointId: pointId || null, roundId: roundId || null, when: nowIso(), device: devName(), operator: opName(), rpm: rpm || null, load: load ?? null, note: note || '', orient, axisMap: om,
                  cfg: { mode: cfg.mode, fs, navg: cfg.navg, win: cfg.win }, quiet, unit: 'cg', dirs: {}, sensor: { ...Sensor.info } };
-  const prog = (f, msg) => { $('#prog').style.display = f == null ? 'none' : 'block'; if (f != null) $('#prog i').style.width = (100*f).toFixed(1) + '%'; if (msg != null) $('#pmsg').textContent = msg; };
+  const prog = (f, msg) => {   // tolerante a que la pantalla haya cambiado durante la medida
+    const P = $('#prog'), I = $('#prog i'), M = $('#pmsg');
+    if (P) P.style.display = f == null ? 'none' : 'block';
+    if (I && f != null) I.style.width = (100*f).toFixed(1) + '%';
+    if (M && msg != null) M.textContent = msg;
+  };
   const total = 3*cfg.navg; let step = 0; const timing = {}, tStart = performance.now();
   busy = true; setChip();
   try {
@@ -1279,31 +1308,37 @@ function estMeasure(cfg) {
   if (lt?.ejes) { const over = (lt.total - (lt.grabacion || 0))/lt.ejes; return Math.round(n*(acq + 0.3 + over)); }
   return Math.round(n*(acq + (pref.get('quiet', true) ? 8 : 5)));
 }
-/* Prueba: ¿graba el sensor los tres ejes con un solo disparo? */
+/* Prueba: ¿graba el sensor los tres ejes con un solo disparo?
+   Se selecciona cada eje (FA01 + FA10) SIN disparar y se lee lo que haya guardado, antes y después de disparar solo Z. */
 async function testSimultaneous() {
   if (busy || !Sensor.connected()) return alert('Conecta el sensor primero.');
-  const out = $('#simMsg'); const say = t => { out.innerHTML = t; };
+  const out = $('#simMsg'); const say = t => { if (out) out.innerHTML = t; };
   const codes = { X: pref.get('codeX', 4), Y: pref.get('codeY', 2), Z: pref.get('codeZ', 1) };
   const eq = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+  const readAxis = async ax => { try { await Sensor.commit(codes[ax], 3); await sleep(300); return await Sensor.download(codes[ax], 120, () => {}, 8); } catch (e) { return null; } };
   busy = true; setChip();
   try {
-    say('1/3 · Leyendo lo que hay guardado ahora en X e Y…');
     const pre = {};
-    for (const ax of ['X','Y']) { try { pre[ax] = await Sensor.download(codes[ax]); } catch (e) { pre[ax] = null; } }
+    for (const ax of ['X','Y']) { say(`1/3 · Seleccionando ${ax} y leyendo lo guardado (sin disparar)…`); pre[ax] = await readAxis(ax); }
     say('2/3 · Disparando una medida <b>solo del eje Z</b>…');
-    await Sensor.measureAxis(codes.Z, 3, { quiet: pref.get('quiet', true), onStage: st => say('2/3 · ' + st + '…') });
-    say('3/3 · Volviendo a leer X e Y…');
+    const z = await Sensor.measureAxis(codes.Z, 3, { quiet: pref.get('quiet', true), onStage: st => say('2/3 · ' + st + '…') });
     const res = [];
     for (const ax of ['X','Y']) {
-      let post = null; try { post = await Sensor.download(codes[ax]); } catch (e) {}
-      res.push({ ax, pre: !!pre[ax], post: !!post, changed: pre[ax] && post ? !eq(pre[ax], post) : null });
+      say(`3/3 · Seleccionando ${ax} y leyendo de nuevo (sin disparar)…`);
+      const post = await readAxis(ax);
+      res.push({ ax, pre: !!pre[ax], post: !!post, changed: pre[ax] && post ? !eq(pre[ax], post) : null, sameAsZ: post ? eq(post, z) : false });
     }
-    const all = res.every(r => r.changed === true), none = res.every(r => r.changed === false);
-    const verdict = all ? '<b style="color:var(--ok)">El sensor graba los tres ejes con un solo disparo.</b> Se puede hacer la medida unas 3 veces más rápida y con los ejes simultáneos.'
-      : none ? '<b>El sensor graba un eje por disparo</b> (X e Y no han cambiado). Hay que medir eje a eje, como ahora.'
+    const txt = r => `${r.ax}: ${!r.post ? 'sin datos' : r.sameAsZ ? 'devuelve lo mismo que Z' : r.changed === null ? 'con datos (antes no tenía)' : r.changed ? 'datos nuevos' : 'sin cambios'}`;
+    const allNew = res.every(r => r.post && !r.sameAsZ && (r.changed !== false));
+    const noneData = res.every(r => !r.post), stale = res.every(r => r.post && r.changed === false), echo = res.every(r => r.sameAsZ);
+    const verdict = allNew ? '<b style="color:var(--ok)">El sensor graba los tres ejes con un solo disparo.</b> Se puede medir unas 3 veces más rápido y con los ejes simultáneos.'
+      : noneData ? '<b>El sensor solo guarda el eje que se ha disparado.</b> Hay que medir eje a eje.'
+      : stale ? '<b>El sensor graba un eje por disparo</b> (X e Y conservan su medida anterior). Hay que medir eje a eje.'
+      : echo ? '<b>El sensor devuelve el mismo bloque para cualquier eje:</b> graba un eje por disparo.'
       : 'Resultado no concluyente. Repite la prueba.';
-    say(res.map(r => `${r.ax}: ${r.post ? (r.changed === null ? 'con datos (sin lectura previa)' : r.changed ? 'datos nuevos' : 'sin cambios') : 'sin datos'}`).join(' · ') + '<br>' + verdict);
-    log('Prueba de captura simultánea: ' + out.textContent, 'ok');
+    say(res.map(txt).join(' · ') + '<br>' + verdict);
+    log('Prueba de captura simultánea: ' + res.map(txt).join(' · ') + ' → ' + verdict.replace(/<[^>]+>/g, ''), 'ok');
+    try { await Sensor.commit(codes.Z, null); } catch (e) {}
   } catch (e) { say('Error: ' + esc(e.message)); }
   finally { busy = false; setChip(); }
 }
@@ -2351,7 +2386,7 @@ async function vSettings() {
             : '<p class="note" style="margin-top:0">Haz una medida y aquí verás cuánto tarda cada fase.</p>'; })()}
           <div class="row" style="margin-top:12px"><button class="sm" id="bSim">Probar captura simultánea de 3 ejes</button></div>
           <div class="pmsg" id="simMsg"></div>
-          <p class="note">La prueba lee X e Y, dispara una medida solo de Z y vuelve a leer X e Y. Si han cambiado, el sensor graba los tres ejes a la vez. Tarda ~30 s; no hace falta tocar el sensor.</p>
+          <p class="note">La prueba selecciona X e Y y lee lo que tienen guardado, dispara una medida solo de Z y vuelve a seleccionar y leer X e Y, sin disparar. Si tienen datos nuevos, el sensor graba los tres ejes a la vez. Tarda ~40 s; no hace falta tocar el sensor.</p>
         </div>
         <div class="card adm">
           <h3>Adquisición</h3>
