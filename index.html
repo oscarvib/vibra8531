@@ -111,6 +111,10 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 .bottomnav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:flex;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
 .bottomnav a{flex:1;text-align:center;padding:10px 0 12px;color:var(--muted);text-decoration:none;font-weight:600;font-size:13px}
 .bottomnav a.act{color:var(--acc)}
+body.op .adm{display:none!important}
+.badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--err);color:#fff;font-size:11px;line-height:18px;margin-left:3px}
+.banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:12px;margin-bottom:12px;background:color-mix(in srgb,var(--acc2) 10%,var(--card));border:1px solid color-mix(in srgb,var(--acc2) 35%,transparent);font-size:14px}
+.banner .m{flex:1;min-width:180px}
 </style>
 </head>
 <body>
@@ -124,7 +128,8 @@ dialog .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
 <nav class="bottomnav">
   <a href="#/" id="navR">Rutas</a>
   <a href="#/libre" id="navL">Libre</a>
-  <a href="#/bd" id="navA">Base de datos</a>
+  <a href="#/bd" id="navA" class="adm">Base de datos</a>
+  <a href="#/sync" id="navY">Sincronizar</a>
   <a href="#/ajustes" id="navS">Ajustes</a>
 </nav>
 <dialog id="dlg"></dialog>
@@ -180,15 +185,15 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '3.0';
+const APP_VERSION = '3.1';
 const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('vibra8531', 2);
+      const r = indexedDB.open('vibra8531', 3);
       r.onupgradeneeded = () => {
         const d = r.result;
-        for (const [n, idx] of [['plants', null], ['machines', 'plantId'], ['points', 'machineId'], ['measurements', 'pointId'], ['routes', 'plantId'], ['rounds', 'routeId']]) {
+        for (const [n, idx] of [['plants', null], ['machines', 'plantId'], ['points', 'machineId'], ['measurements', 'pointId'], ['routes', 'plantId'], ['rounds', 'routeId'], ['kv', null]]) {
           if (d.objectStoreNames.contains(n)) continue;
           const s = d.createObjectStore(n, { keyPath: 'id' }); if (idx) s.createIndex(idx, idx);
         }
@@ -653,8 +658,9 @@ function crumbs(parts) {
 let freeView = false;
 async function route() {
   const h = location.hash || '#/', [, kind, id] = h.split('/');
-  const sect = !kind || ['r','ronda'].includes(kind) ? 'R' : kind === 'libre' ? 'L' : kind === 'ajustes' ? 'S' : 'A';
-  for (const k of 'RLAS') $('#nav' + k).classList.toggle('act', sect === k);
+  const sect = !kind || ['r','ronda'].includes(kind) ? 'R' : kind === 'libre' ? 'L' : kind === 'ajustes' ? 'S' : kind === 'sync' ? 'Y' : 'A';
+  for (const k of 'RLAYS') $('#nav' + k).classList.toggle('act', sect === k);
+  applyMode(); updateSyncBadge();
   if (kind === 'm' && freeView) { $('#navA').classList.remove('act'); $('#navL').classList.add('act'); }
   try {
     if (!kind) await vRoutes();
@@ -667,6 +673,7 @@ async function route() {
     else if (kind === 'm') await vMeas(id);
     else if (kind === 'ajustes') await vSettings();
     else if (kind === 'libre') await vFree();
+    else if (kind === 'sync') await vSync();
     else await vRoutes();
   } catch (e) { view.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`; console.error(e); }
   setChip();
@@ -678,11 +685,11 @@ async function vPlants() {
   const plants = (await DB.all('plants')).sort((a, b) => a.name.localeCompare(b.name));
   const machines = await DB.all('machines');
   view.innerHTML = `
-    <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="pri" id="bNew">+ Barco</button></div>
+    <div class="titlebar"><div><h2>Base de datos</h2><div class="sub">Barcos → máquinas → puntos de medida, con su configuración</div></div><span class="sp"></span><button class="pri adm" id="bNew">+ Barco</button></div>
     <div class="list">${plants.length ? plants.map(p => {
       const n = machines.filter(m => m.plantId === p.id).length;
       return `<a class="item" href="#/b/${p.id}"><div class="m"><div class="t">${esc(p.name)}</div><div class="d">${esc(p.code || '')}${p.code ? ' · ' : ''}${n} máquina${n === 1 ? '' : 's'}</div></div><span class="chev">›</span></a>`;
-    }).join('') : `<div class="empty">Aún no hay barcos.<br><br><button class="pri" id="bNew2">Crear el primer barco</button><br><br><span class="hint">o carga unos datos de ejemplo en Ajustes</span></div>`}</div>`;
+    }).join('') : `<div class="empty">Aún no hay barcos.<br><br><button class="pri adm" id="bNew2">Crear el primer barco</button><br><br><span class="hint">o carga unos datos de ejemplo en Ajustes</span></div>`}</div>`;
   const nb = async () => {
     const v = await formDialog('Nuevo barco', [
       { k: 'name', label: 'Nombre', req: true, ph: 'p. ej. Patrullero Río Miño' },
@@ -708,8 +715,8 @@ async function vPlant(id) {
   const machines = (await DB.by('machines', 'plantId', id)).sort((a, b) => a.name.localeCompare(b.name));
   const points = await DB.all('points');
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], [null, p.name]]) + `
-    <div class="titlebar"><div><h2>${esc(p.name)}</h2><div class="sub">${esc(p.code || '')} ${esc(p.notes || '')}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
-    <div class="titlebar"><h3 style="margin:0;font-size:15px">Máquinas</h3><span class="sp"></span><button class="pri" id="bNew">+ Máquina</button></div>
+    <div class="titlebar"><div><h2>${esc(p.name)}</h2><div class="sub">${esc(p.code || '')} ${esc(p.notes || '')}</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><h3 style="margin:0;font-size:15px">Máquinas</h3><span class="sp"></span><button class="pri adm" id="bNew">+ Máquina</button></div>
     <div class="list">${machines.length ? machines.map(m => {
       const n = points.filter(x => x.machineId === m.id).length;
       return `<a class="item" href="#/q/${m.id}"><div class="m"><div class="t">${esc(m.name)}</div><div class="d">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''}${m.location ? ' · ' + esc(m.location) : ''}</div></div><div class="r">${n} punto${n === 1 ? '' : 's'}</div><span class="chev">›</span></a>`;
@@ -747,8 +754,8 @@ async function vMachine(id) {
   const last = {};
   for (const pt of pts) { const ms = await DB.by('measurements', 'pointId', pt.id); ms.sort(byWhen); last[pt.id] = { n: ms.length, m: ms[0] }; }
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], [null, m.name]]) + `
-    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
-    <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri" id="bNew">+ Punto</button></div>
+    <div class="titlebar"><div><h2>${esc(m.name)}</h2><div class="sub">${esc(m.type)} · ${m.rpm} rpm${m.kw ? ' · ' + m.kw + ' kW' : ''} · ISO clase ${['I','II','III','IV'][m.iso ?? 1]}${m.location ? ' · ' + esc(m.location) : ''}</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><h3 style="margin:0;font-size:15px">Puntos de medida</h3><span class="sp"></span><button class="pri adm" id="bNew">+ Punto</button></div>
     <div class="list">${pts.length ? pts.map(pt => {
       const L = last[pt.id], ov = L.m?.overall;
       return `<a class="item" href="#/p/${pt.id}"><div class="m"><div class="t">${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</div>
@@ -791,7 +798,7 @@ async function vPoint(id) {
   view.innerHTML = crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], [null, (pt.code ? pt.code + ' · ' : '') + pt.name]]) + `
     <div class="titlebar"><div><h2>${pt.code ? esc(pt.code) + ' · ' : ''}${esc(pt.name)}</h2>
       <div class="sub">${esc(modeLabel(cfg.mode))} · ${cfg.navg} prom. · ${WIN_NAME[cfg.win]} ${locked ? '<span class="tag lock">🔒 config. bloqueada</span>' : ''}</div></div>
-      <span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+      <span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
         <div class="card">
@@ -1073,7 +1080,7 @@ function getSpec(meas, d) {
 async function vMeas(id) {
   const ms = await DB.get('measurements', id); if (!ms) { location.hash = '#/'; return; }
   const free = !ms.pointId; freeView = free;
-  if (free) { for (const k of 'RAS') $('#nav' + k).classList.remove('act'); $('#navL').classList.add('act'); }
+  if (free) { for (const k of 'RAYS') $('#nav' + k).classList.remove('act'); $('#navL').classList.add('act'); }
   const pt = free ? null : await DB.get('points', ms.pointId), m = free ? { iso: pref.get('freeIso', 1) } : await DB.get('machines', pt.machineId), p = free ? null : await DB.get('plants', m.plantId);
   const sibs = (free ? (await DB.all('measurements')).filter(x => !x.pointId) : await DB.by('measurements', 'pointId', pt.id)).sort(byWhen);
   const dirsHere = DIRS.filter(d => ms.dirs[d]?.length);
@@ -1084,8 +1091,8 @@ async function vMeas(id) {
   view.innerHTML = (free ? crumbs([['#/libre', 'Medida libre'], [null, fdate(ms.when)]])
       : crumbs([['#/bd', 'Base de datos'], ['#/b/' + p.id, p.name], ['#/q/' + m.id, m.name], ['#/p/' + pt.id, (pt.code ? pt.code + ' · ' : '') + pt.name], [null, fdate(ms.when)]])) + `
     ${free ? `<div class="card" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-color:var(--acc)">
-      <div style="flex:1;min-width:200px"><b>Medida libre</b><div class="hint">No está asignada a ningún punto. Guárdala si quieres conservarla en el historial de una máquina.</div></div>
-      <button class="pri" id="bSaveTo">Guardar en un punto…</button></div>` : ''}
+      <div style="flex:1;min-width:200px"><b>Medida libre</b><div class="hint">${isOp() ? 'No está asignada a ningún punto. Se enviará a la oficina con las demás medidas para que la revisen.' : 'No está asignada a ningún punto. Guárdala si quieres conservarla en el historial de una máquina.'}</div></div>
+      <button class="pri adm" id="bSaveTo">Guardar en un punto…</button></div>` : ''}
     <div class="titlebar"><div><h2>${fdate(ms.when)}</h2>
       <div class="sub">${ms.rpm ? fmt(ms.rpm, 5) + ' rpm' : 'sin rpm'} · ${ms.load != null ? 'carga ' + fmt(ms.load, 3) + ' %' : 'sin carga'} · sensor ${esc(orientText(ms.orient))}${ms.note ? ' · ' + esc(ms.note) : ''}${ms.demo ? ' · <span class="tag">ejemplo</span>' : ''}</div></div>
       <span class="sp"></span>
@@ -1110,7 +1117,7 @@ async function vMeas(id) {
             <span>Temperatura interna</span><span>${ms.sensor?.temp != null ? fmt(ms.sensor.temp, 3) + ' °C' : '–'}</span>
             <span>Ejes</span><span>${esc(orientText(ms.orient))}</span>
           </div>
-          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
+          <div class="row" style="margin-top:12px"><button class="sm" id="bCsv">Exportar CSV</button><button class="sm danger ${free ? '' : 'adm'}" id="bDel">${free ? 'Descartar' : 'Borrar medida'}</button></div>
         </div>
       </div>
       <div class="col">
@@ -1194,7 +1201,9 @@ const PERIODS = [[7,'Semanal'],[14,'Quincenal'],[30,'Mensual'],[60,'Bimestral'],
 const periodName = d => (PERIODS.find(p => p[0] === d) || [0, `Cada ${d} días`])[1];
 async function routeState(r) {
   const rounds = (await DB.by('rounds', 'routeId', r.id)).sort((a, b) => (a.started < b.started ? 1 : -1));
-  const open = rounds.find(x => !x.finished), lastDone = rounds.find(x => x.finished);
+  const open = rounds.find(x => !x.finished);
+  let lastDone = rounds.filter(x => x.finished).sort((a, b) => (a.finished < b.finished ? 1 : -1))[0];
+  if (r.lastDone && (!lastDone || r.lastDone > lastDone.finished)) lastDone = { finished: r.lastDone };   // dato de la oficina
   const due = lastDone ? Date.parse(lastDone.finished) + r.period*DAY : null;
   const days = due == null ? null : Math.ceil((due - Date.now())/DAY);
   let st;
@@ -1216,7 +1225,8 @@ async function vRoutes() {
   const rank = x => x.s.open ? 0 : x.s.days == null ? 1 : x.s.days < 0 ? 2 : 3;
   rows.sort((a, b) => rank(a) - rank(b) || (a.s.days ?? 0) - (b.s.days ?? 0) || a.r.name.localeCompare(b.r.name));
   view.innerHTML = `
-    <div class="titlebar"><div><h2>Rutas</h2><div class="sub">Tareas programadas de medida</div></div><span class="sp"></span>${plants.length ? '<button class="pri" id="bNew">+ Ruta</button>' : ''}</div>
+    <div class="titlebar"><div><h2>Rutas</h2><div class="sub">Tareas programadas de medida</div></div><span class="sp"></span>${plants.length ? '<button class="pri adm" id="bNew">+ Ruta</button>' : ''}</div>
+    ${isOp() ? await opBanner() : ''}
     <div class="list">${rows.length ? rows.map(({ r, s: st, p }) => {
       const pr = st.open ? roundProgress(st.open, r) : null;
       return `<a class="item" href="#/r/${r.id}"><div class="m">
@@ -1224,7 +1234,7 @@ async function vRoutes() {
         <div class="d">${esc(p?.name || '¿barco borrado?')} · ${r.points.length} punto${r.points.length === 1 ? '' : 's'} · ${periodName(r.period)}${st.lastDone ? ' · última ' + fday(st.lastDone.finished) : ''}</div>
         <div style="margin-top:6px">${stTag(st.st)}${pr ? ` <span class="hint">${pr.done}/${pr.total} puntos</span>` : ''}</div>
       </div><span class="chev">›</span></a>`;
-    }).join('') : `<div class="empty">${plants.length
+    }).join('') : `<div class="empty">${isOp() ? 'No hay rutas en este móvil.<br><br><button class="pri" onclick="location.hash=\'#/sync\'">Recibir el plan de la oficina</button>' : plants.length
         ? 'Aún no hay rutas. Una ruta es una lista ordenada de puntos que se mide periódicamente.<br><br><button class="pri" id="bNew2">Crear la primera ruta</button>'
         : 'Primero crea en <a href="#/bd">Base de datos</a> los barcos, máquinas y puntos.<br><span class="hint">o carga unos datos de ejemplo en Ajustes</span>'}</div>`}</div>`;
   const nb = () => editRoute(null);
@@ -1298,9 +1308,9 @@ async function vRoute(id) {
   const st = await routeState(r);
   const pr = st.open ? roundProgress(st.open, r) : null;
   const lastByPt = {};
-  for (const pid of r.points) { const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen); lastByPt[pid] = ms[0]; }
+  for (const pid of r.points) { const ms = (await DB.by('measurements', 'pointId', pid)).sort(byWhen); lastByPt[pid] = ms[0] || points.find(x => x.id === pid)?.last; }
   view.innerHTML = crumbs([['#/', 'Rutas'], [null, r.name]]) + `
-    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ${periodName(r.period)} · ${r.points.length} puntos</div></div><span class="sp"></span><button class="sm" id="bEdit">Editar</button></div>
+    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ${periodName(r.period)} · ${r.points.length} puntos</div></div><span class="sp"></span><button class="sm adm" id="bEdit">Editar</button></div>
     <div class="grid two">
       <div class="col">
         <div class="card">
@@ -1357,12 +1367,14 @@ async function vRound(id) {
   // medidas del punto (anterior a esta ronda)
   const hist = cur ? (await DB.by('measurements', 'pointId', cur.id)).sort(byWhen) : [];
   const thisMeas = it?.measId ? hist.find(x => x.id === it.measId) : null;
-  const prevMeas = hist.find(x => x.id !== it?.measId && (!thisMeas || x.when < thisMeas.when));
+  const prevMeas = hist.find(x => x.id !== it?.measId && (!thisMeas || x.when < thisMeas.when))
+    || (cur?.last && (!thisMeas || cur.last.when < thisMeas.when) ? cur.last : null);
   // rpm y carga sugeridas: otra medida de la misma máquina en esta ronda, si no la última del punto, si no la nominal
   let sugRpm = mach?.rpm ?? '', sugLoad = '';
   const sameMach = Object.entries(items).filter(([pid, v]) => v.status === 'done' && points.find(x => x.id === pid)?.machineId === cur?.machineId).map(([, v]) => v);
   if (sameMach.length) { const last = sameMach.sort((a, b) => (a.when < b.when ? 1 : -1))[0]; sugRpm = last.rpm ?? sugRpm; sugLoad = last.load ?? ''; }
   else if (hist[0]) { sugRpm = hist[0].rpm ?? sugRpm; sugLoad = hist[0].load ?? ''; }
+  else if (cur?.last) { sugRpm = cur.last.rpm ?? sugRpm; sugLoad = cur.last.load ?? ''; }
   const o = cur?.orient || orientDefault, finished = !!rd.finished;
   const deltaHtml = (a, b) => {
     if (!a || !b) return '';
@@ -1427,7 +1439,11 @@ async function vRound(id) {
   };
   if ($('#bNext')) $('#bNext').onclick = goNext;
   if ($('#bRedo')) $('#bRedo').onclick = async () => { delete items[curId]; await DB.put('rounds', rd); route(); };
-  const finishRound = async () => { rd.finished = nowIso(); await DB.put('rounds', rd); log(`Ronda «${r.name}» finalizada`, 'ok'); route(); };
+  const finishRound = async () => {
+    rd.finished = nowIso(); await DB.put('rounds', rd); log(`Ronda «${r.name}» finalizada`, 'ok');
+    if (isOp() && confirm('Ronda finalizada. ¿Enviar ahora las medidas a la oficina?')) { location.hash = '#/sync'; return; }
+    route();
+  };
   if ($('#bFinish')) $('#bFinish').onclick = finishRound;
   if ($('#bFinishEarly')) $('#bFinishEarly').onclick = async () => {
     if (!confirm(`Quedan ${pending.length} puntos sin medir. ¿Finalizar la ronda igualmente? Se marcarán como saltados.`)) return;
@@ -1460,6 +1476,250 @@ async function vRound(id) {
   };
 }
 
+
+/* =====================================================================
+   Modos y sincronización con OneDrive (oficina ⇄ móvil)
+   ===================================================================== */
+const defaultMode = () => (matchMedia('(pointer:coarse)').matches ? 'operador' : 'oficina');
+const isOp = () => pref.get('mode', 'oficina') === 'operador';
+function applyMode() { document.body.classList.toggle('op', isOp()); }
+const devName = () => pref.get('device', '') || (isOp() ? 'movil' : 'oficina');
+// Codificación compacta de los bloques (Int16 → base64)
+function i16ToB64(a) { const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return 'b64:' + btoa(s); }
+function b64ToI16(s) { const b = atob(s.slice(4)), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Int16Array(u.buffer); }
+const packDirs = dirs => Object.fromEntries(Object.entries(dirs).map(([d, bl]) => [d, bl.map(i16ToB64)]));
+const unpackDirs = dirs => Object.fromEntries(Object.entries(dirs).map(([d, bl]) => [d, bl.map(b => typeof b === 'string' ? b64ToI16(b) : Int16Array.from(b))]));
+const newer = (inc, cur) => !cur || (inc.updated || '') >= (cur.updated || '');
+async function mergeRecords(store, list) {
+  let n = 0;
+  for (const o of list || []) { const cur = await DB.get(store, o.id); if (newer(o, cur)) { await DB.put(store, o, false); n++; } }
+  return n;
+}
+const stampFile = () => new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+
+/* --- Plan (oficina → móvil) --- */
+async function buildPlan() {
+  const [plants, machines, points, routes] = await Promise.all(['plants','machines','points','routes'].map(s => DB.all(s)));
+  for (const pt of points) {
+    const ms = (await DB.by('measurements', 'pointId', pt.id)).sort(byWhen)[0];
+    pt.last = ms ? { id: ms.id, when: ms.when, rpm: ms.rpm, load: ms.load, overall: ms.overall } : (pt.last || null);
+  }
+  for (const r of routes) {
+    const done = (await DB.by('rounds', 'routeId', r.id)).filter(x => x.finished).sort((a, b) => (a.finished < b.finished ? 1 : -1))[0];
+    if (done && (!r.lastDone || done.finished > r.lastDone)) r.lastDone = done.finished;
+  }
+  return { app: 'vibra8531', kind: 'plan', schema: 3, exported: nowIso(), from: devName(), plants, machines, points, routes };
+}
+async function importPlan(j) {
+  if (j.app !== 'vibra8531' || j.kind !== 'plan') throw new Error('el archivo no es un plan de Vibra 8531');
+  // en el móvil el plan manda: se sustituyen barcos, máquinas, puntos y rutas (las medidas y rondas se conservan)
+  for (const st of ['plants','machines','points','routes']) {
+    const keep = new Set((j[st] || []).map(x => x.id));
+    for (const o of await DB.all(st)) if (!keep.has(o.id)) await DB.del(st, o.id);
+    for (const o of j[st] || []) await DB.put(st, o, false);
+  }
+  pref.set('planInfo', { exported: j.exported, received: nowIso(), from: j.from, routes: (j.routes || []).length, points: (j.points || []).length });
+  log(`Plan recibido: ${(j.routes || []).length} rutas, ${(j.points || []).length} puntos`, 'ok');
+}
+
+/* --- Datos (móvil → oficina) --- */
+async function pendingData() {
+  const ms = (await DB.all('measurements')).filter(x => !x.sent && !x.demo);
+  const since = pref.get('lastSent', '');
+  const rds = (await DB.all('rounds')).filter(x => (x.updated || x.started) > since);
+  return { ms, rds };
+}
+async function buildData() {
+  const { ms, rds } = await pendingData();
+  return { file: { app: 'vibra8531', kind: 'datos', schema: 3, exported: nowIso(), from: devName(),
+                   measurements: ms.map(x => ({ ...x, dirs: packDirs(x.dirs) })), rounds: rds }, ms, rds };
+}
+async function markSent(ms) { for (const x of ms) { x.sent = nowIso(); await DB.put('measurements', x, false); } pref.set('lastSent', nowIso()); }
+async function importData(j) {
+  if (j.app !== 'vibra8531' || j.kind !== 'datos') throw new Error('el archivo no contiene medidas de Vibra 8531');
+  const pts = new Set((await DB.all('points')).map(x => x.id));
+  let nm = 0, orphan = 0;
+  for (const o of j.measurements || []) {
+    if (await DB.get('measurements', o.id)) continue;
+    o.dirs = unpackDirs(o.dirs); delete o.sent;
+    if (o.pointId && !pts.has(o.pointId)) { o.note = (o.note ? o.note + ' · ' : '') + 'punto desconocido en la oficina'; o.pointId = null; orphan++; }
+    await DB.put('measurements', o, false); nm++;
+  }
+  const nr = await mergeRecords('rounds', j.rounds);
+  return { nm, nr, orphan };
+}
+async function updateSyncBadge() {
+  const a = $('#navY'); if (!a) return;
+  let n = 0;
+  if (isOp()) { try { n = (await pendingData()).ms.length; } catch (e) {} }
+  a.innerHTML = (isOp() ? 'Enviar' : 'Sincronizar') + (n ? `<span class="badge">${n}</span>` : '');
+}
+async function opBanner() {
+  const { ms } = await pendingData(), pi = pref.get('planInfo', null);
+  if (ms.length) return `<div class="banner"><div class="m"><b>${ms.length} medida${ms.length === 1 ? '' : 's'} sin enviar</b> a la oficina.</div><button class="pri sm" onclick="location.hash='#/sync'">Enviar</button></div>`;
+  if (pi) return `<div class="hint" style="margin:-4px 0 10px">Plan de la oficina del ${fday(pi.exported)}. <a href="#/sync">Actualizar</a></div>`;
+  return '';
+}
+
+/* --- Carpeta de OneDrive en el PC (File System Access API, Chrome/Edge) --- */
+const FS = {
+  ok: () => 'showDirectoryPicker' in window,
+  async getHandle() { try { return await DB.get('kv', 'syncDir').then(x => x?.h); } catch (e) { return null; } },
+  async setHandle(h) { await DB.put('kv', { id: 'syncDir', h }, false); },
+  async perm(h, ask) {
+    const o = { mode: 'readwrite' };
+    if ((await h.queryPermission(o)) === 'granted') return true;
+    return ask ? (await h.requestPermission(o)) === 'granted' : false;
+  }
+};
+async function officeSync(h) {
+  const out = { imported: [], nm: 0, nr: 0, orphan: 0, plan: null };
+  const inDir = await h.getDirectoryHandle('desde_movil', { create: true });
+  const outDir = await h.getDirectoryHandle('hacia_movil', { create: true });
+  const done = new Set(pref.get('processed', []));
+  for await (const [name, fh] of inDir.entries()) {
+    if (fh.kind !== 'file' || !name.toLowerCase().endsWith('.json')) continue;
+    const f = await fh.getFile(), key = `${name}|${f.size}|${f.lastModified}`;
+    if (done.has(key)) continue;
+    try {
+      const r = await importData(JSON.parse(await f.text()));
+      out.nm += r.nm; out.nr += r.nr; out.orphan += r.orphan; out.imported.push(name);
+      done.add(key);
+    } catch (e) { log(`No se pudo importar ${name}: ${e.message}`, 'warn'); }
+  }
+  pref.set('processed', [...done].slice(-500));
+  const plan = await buildPlan();
+  const w = await (await outDir.getFileHandle('vibra8531_plan.json', { create: true })).createWritable();
+  await w.write(JSON.stringify(plan)); await w.close();
+  out.plan = plan;
+  pref.set('lastSync', { when: nowIso(), ...out, plan: { routes: plan.routes.length, points: plan.points.length } });
+  log(`Sincronizado: ${out.nm} medidas y ${out.nr} rondas recibidas; plan publicado (${plan.routes.length} rutas)`, 'ok');
+  return out;
+}
+
+/* --- Pantalla Sincronizar / Enviar --- */
+async function vSync() {
+  if (isOp()) return vSyncOp();
+  const h = FS.ok() ? await FS.getHandle() : null;
+  const granted = h ? await FS.perm(h, false) : false;
+  const ls = pref.get('lastSync', null);
+  view.innerHTML = `
+    <div class="titlebar"><div><h2>Sincronizar</h2><div class="sub">Intercambio con los móviles a través de una carpeta de OneDrive</div></div></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card">
+          <h3>Carpeta de OneDrive</h3>
+          ${FS.ok() ? `
+            <div class="kv"><span>Carpeta</span><span>${h ? '<b>' + esc(h.name) + '</b>' : 'sin elegir'}</span>
+              <span>Estado</span><span>${!h ? '–' : granted ? '<span style="color:var(--ok)">conectada</span>' : '<span style="color:var(--warn)">hay que dar permiso</span>'}</span>
+              <span>Última sincronización</span><span>${ls ? fdate(ls.when) : 'nunca'}</span></div>
+            <div class="row" style="margin-top:12px">
+              ${h ? '<button class="pri" id="bSync">Sincronizar ahora</button>' : ''}
+              <button id="bPick">${h ? 'Cambiar carpeta…' : 'Elegir carpeta…'}</button>
+            </div>
+            <div class="pmsg" id="syncMsg">${ls ? `Última vez: ${ls.nm} medidas y ${ls.nr} rondas recibidas · plan con ${ls.plan?.routes ?? '?'} rutas y ${ls.plan?.points ?? '?'} puntos.` : ''}</div>`
+          : '<p class="note">Este navegador no permite abrir carpetas. Usa Chrome o Edge en el PC, o los botones manuales de abajo.</p>'}
+        </div>
+        <div class="card">
+          <h3>Manual (sin carpeta)</h3>
+          <div class="row">
+            <button id="bPlanDl">Descargar plan para el móvil</button>
+            <button id="bDataIn">Importar archivos del móvil…</button>
+            <input type="file" id="fDataIn" accept=".json,application/json" multiple hidden>
+          </div>
+          <div class="pmsg" id="manMsg"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Cómo funciona</h3>
+          <ol style="margin:0;padding-left:18px;font-size:14px;line-height:1.55">
+            <li>Crea en tu OneDrive una carpeta <b>Vibra8531</b> y elígela aquí. La app crea dentro <b>hacia_movil</b> y <b>desde_movil</b>.</li>
+            <li><b>Sincronizar ahora</b> importa las medidas que han dejado los móviles en <b>desde_movil</b> y publica el plan (barcos, máquinas, puntos y rutas) en <b>hacia_movil/vibra8531_plan.json</b>.</li>
+            <li>En el móvil (modo Operador), <b>Recibir plan</b> abre ese archivo desde OneDrive, y <b>Enviar medidas</b> lo comparte a OneDrive → carpeta <b>desde_movil</b>.</li>
+            <li>Las medidas libres del operador llegan a la bandeja de <a href="#/libre">Medida libre</a> para que las asignes a un punto.</li>
+          </ol>
+          <p class="note">La carpeta se sincroniza con la nube a través de la aplicación de OneDrive del PC. Los archivos ya importados no se vuelven a procesar.</p>
+        </div>
+      </div>
+    </div>`;
+  const msg = t => $('#syncMsg') && ($('#syncMsg').textContent = t);
+  const doSync = async handle => {
+    try {
+      if (!(await FS.perm(handle, true))) return msg('Sin permiso sobre la carpeta.');
+      msg('Sincronizando…');
+      const r = await officeSync(handle);
+      msg(`Hecho: ${r.nm} medidas y ${r.nr} rondas recibidas${r.orphan ? ` (${r.orphan} de puntos desconocidos, en la bandeja de Medida libre)` : ''} · plan publicado con ${r.plan.routes.length} rutas.`);
+      setTimeout(route, 1500);
+    } catch (e) { msg('Error: ' + e.message); log('Sincronizar: ' + e.message, 'err'); }
+  };
+  if ($('#bPick')) $('#bPick').onclick = async () => {
+    try { const nh = await window.showDirectoryPicker({ id: 'vibra8531', mode: 'readwrite' }); await FS.setHandle(nh); await doSync(nh); }
+    catch (e) { if (e.name !== 'AbortError') msg('Error: ' + e.message); }
+  };
+  if ($('#bSync')) $('#bSync').onclick = () => doSync(h);
+  $('#bPlanDl').onclick = async () => { download('vibra8531_plan.json', JSON.stringify(await buildPlan()), 'application/json'); $('#manMsg').textContent = 'Plan descargado. Guárdalo en OneDrive › Vibra8531 › hacia_movil.'; };
+  $('#bDataIn').onclick = () => $('#fDataIn').click();
+  $('#fDataIn').onchange = async e => {
+    let nm = 0, nr = 0, orphan = 0;
+    for (const f of e.target.files) { try { const r = await importData(JSON.parse(await f.text())); nm += r.nm; nr += r.nr; orphan += r.orphan; } catch (err) { log(`${f.name}: ${err.message}`, 'warn'); } }
+    $('#manMsg').textContent = `Importadas ${nm} medidas y ${nr} rondas${orphan ? ` (${orphan} a la bandeja de Medida libre)` : ''}.`;
+    e.target.value = '';
+  };
+}
+async function vSyncOp() {
+  const { ms, rds } = await pendingData(), pi = pref.get('planInfo', null);
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.json', { type: 'application/json' })] }));
+  view.innerHTML = `
+    <div class="titlebar"><div><h2>Enviar y recibir</h2><div class="sub">Intercambio con la oficina a través de OneDrive</div></div></div>
+    <div class="grid two">
+      <div class="col">
+        <div class="card" style="${ms.length ? 'border-color:var(--acc)' : ''}">
+          <h3>Enviar medidas a la oficina</h3>
+          <div style="font-size:17px"><b>${ms.length}</b> medida${ms.length === 1 ? '' : 's'} sin enviar${rds.length ? ` · ${rds.length} ronda${rds.length === 1 ? '' : 's'}` : ''}</div>
+          <div style="margin-top:12px"><button class="pri big" id="bSend" ${ms.length || rds.length ? '' : 'disabled'}>${canShare ? 'Enviar a OneDrive' : 'Descargar archivo de medidas'}</button></div>
+          <p class="note">${canShare ? 'Se abrirá el menú de compartir: elige <b>OneDrive</b> y la carpeta <b>Vibra8531 › desde_movil</b>.' : 'Guarda el archivo descargado en OneDrive › Vibra8531 › desde_movil.'}</p>
+          <div class="pmsg" id="sendMsg">${pref.get('lastSent', '') ? 'Último envío: ' + fdate(pref.get('lastSent')) : ''}</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Recibir plan de la oficina</h3>
+          ${pi ? `<div class="kv"><span>Plan actual</span><span>${fdate(pi.exported)}</span><span>Contenido</span><span>${pi.routes} rutas · ${pi.points} puntos</span><span>Recibido</span><span>${fdate(pi.received)}</span></div>` : '<p class="note" style="margin-top:0">Todavía no has recibido ningún plan.</p>'}
+          <div style="margin-top:12px"><button class="big" id="bPlan">Abrir plan desde OneDrive…</button></div>
+          <input type="file" id="fPlan" accept=".json,application/json" hidden>
+          <p class="note">En el selector de archivos, entra en <b>OneDrive › Vibra8531 › hacia_movil</b> y elige <b>vibra8531_plan.json</b>.</p>
+          <div class="pmsg" id="planMsg"></div>
+        </div>
+      </div>
+    </div>`;
+  $('#bSend').onclick = async () => {
+    const { file, ms: list } = await buildData();
+    const name = `vibra8531_${devName().replace(/\W+/g, '_')}_${stampFile()}.json`, text = JSON.stringify(file);
+    try {
+      if (canShare) {
+        const f = new File([text], name, { type: 'application/json' });
+        await navigator.share({ files: [f], title: name });
+      } else download(name, text, 'application/json');
+      await markSent(list);
+      $('#sendMsg').textContent = `Enviadas ${list.length} medidas (${name}).`;
+      log(`Medidas enviadas: ${list.length}`, 'ok'); setTimeout(route, 1200);
+    } catch (e) {
+      $('#sendMsg').textContent = e.name === 'AbortError' ? 'Envío cancelado: las medidas siguen pendientes.' : 'Error: ' + e.message;
+    }
+  };
+  $('#bPlan').onclick = () => $('#fPlan').click();
+  $('#fPlan').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try {
+      const j = JSON.parse(await f.text());
+      if (pref.get('planInfo', null) === null && (await DB.all('plants')).length && !confirm('El plan sustituirá los barcos, máquinas, puntos y rutas de este móvil (las medidas se conservan). ¿Continuar?')) return;
+      await importPlan(j);
+      $('#planMsg').textContent = 'Plan recibido.'; setTimeout(() => { location.hash = '#/'; }, 800);
+    } catch (err) { $('#planMsg').textContent = 'No se pudo abrir: ' + err.message; }
+  };
+}
+
 /* ---------------- Ajustes ---------------- */
 async function vSettings() {
   const st = Sensor.lastStatus || {}, inf = Sensor.info || {};
@@ -1471,6 +1731,12 @@ async function vSettings() {
     <div class="grid two">
       <div class="col">
         <div class="card">
+          <h3>Modo de la app</h3>
+          <div class="seg" id="modeSeg"><button data-m="oficina" class="${isOp() ? '' : 'on'}">Oficina</button><button data-m="operador" class="${isOp() ? 'on' : ''}">Operador</button></div>
+          <p class="note">${isOp() ? '<b>Operador:</b> solo rutas, medida libre y envío de datos. La base de datos y las rutas llegan desde la oficina.' : '<b>Oficina:</b> base de datos, rutas, análisis y sincronización con la carpeta de OneDrive.'}</p>
+          <label class="field" style="margin-top:10px"><span>Nombre de este dispositivo</span><input id="devName" value="${esc(pref.get('device', ''))}" placeholder="p. ej. movil-patrullero"></label>
+        </div>
+        <div class="card">
           <h3>Sensor</h3>
           ${Sensor.connected() ? `<div class="kv">
             <span>Nombre</span><span>${esc(inf.name || '–')}</span><span>Modelo</span><span>${esc(inf.model || '–')}</span>
@@ -1479,7 +1745,7 @@ async function vSettings() {
             <div class="row" style="margin-top:10px"><button class="sm" id="bStat">Actualizar</button></div>`
           : '<p class="note" style="margin-top:0">Sin conectar. Si no aparece al pulsar Conectar, despiértalo con un toque de imán en el icono «U» o sacando y metiendo la pila: anuncia durante 1 h.</p>'}
         </div>
-        <div class="card">
+        <div class="card adm">
           <h3>Adquisición</h3>
           <label class="chk"><input type="checkbox" id="quiet" ${pref.get('quiet', true) ? 'checked' : ''}> Desconectar el Bluetooth durante la medida (sin ruido de la radio)</label>
           <div class="row" style="margin-top:12px">
@@ -1499,14 +1765,14 @@ async function vSettings() {
             <input type="file" id="fOpen" accept=".json,application/json" hidden>
           </div>
           <div class="row" style="margin-top:10px">
-            <button class="sm" id="bSample">Cargar datos de ejemplo</button>
-            <button class="sm danger" id="bWipe">Borrar todos los datos</button>
+            <button class="sm adm" id="bSample">Cargar datos de ejemplo</button>
+            <button class="sm danger adm" id="bWipe">Borrar todos los datos</button>
           </div>
           <p class="note">Los datos se guardan en este navegador y funcionan sin conexión. Guarda una copia de vez en cuando: sirve de respaldo y para pasar los datos del móvil al PC (al abrirla se combinan con los existentes).</p>
         </div>
       </div>
       <div class="col">
-        <div class="card">
+        <div class="card adm">
           <h3>Técnico · explorador GATT</h3>
           <div class="row"><button class="sm" id="bDiag">Listar servicios</button><button class="sm" id="bDump">Volcar todo</button></div>
           <div class="row" style="margin-top:10px">
@@ -1525,6 +1791,13 @@ async function vSettings() {
   $('#log').replaceChildren(...logBuf.map(e => e.cloneNode(true)));
   if ($('#bStat')) $('#bStat').onclick = async () => { Sensor.lastStatus = await Sensor.status(); route(); };
   $('#quiet').onchange = () => pref.set('quiet', $('#quiet').checked);
+  $('#devName').onchange = () => pref.set('device', $('#devName').value.trim());
+  $$('#modeSeg button').forEach(b => b.onclick = () => {
+    const m = b.dataset.m; if (m === pref.get('mode', 'oficina')) return;
+    if (m === 'oficina' && !confirm('El modo Oficina permite editar la base de datos y las rutas. ¿Cambiar?')) return;
+    if (m === 'operador' && !confirm('En modo Operador se ocultan la base de datos, la edición de rutas y las opciones técnicas. ¿Cambiar?')) return;
+    pref.set('mode', m); route();
+  });
   for (const k of ['codeX','codeY','codeZ','blk']) $('#' + k).onchange = () => pref.set(k, +$('#' + k).value);
   $('#bSave').onclick = saveBackup;
   $('#bOpen').onclick = () => $('#fOpen').click();
@@ -1672,7 +1945,8 @@ async function xOp(write, read) {
   if (!navigator.bluetooth) view.insertAdjacentHTML('beforebegin', '<div class="warnbox" style="max-width:1168px;margin:12px auto 0">Este navegador no tiene Web Bluetooth: puedes revisar datos, pero para medir usa Chrome o Edge (Android, Windows, macOS) abriendo la página por https o desde localhost.</div>');
   try { await DB.open(); } catch (e) { view.innerHTML = `<div class="empty">No se pudo abrir la base de datos local: ${esc(e.message)}</div>`; return; }
   try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch (e) {}
-  setChip(); route();
+  if (!pref.get('mode', null)) pref.set('mode', defaultMode());   // se decide una vez y se guarda
+  applyMode(); setChip(); route();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(e => log('Modo sin conexión no disponible: ' + e.message, 'warn'));
 })();
 </script>
