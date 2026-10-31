@@ -248,7 +248,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '4.6';
+const APP_VERSION = '4.7';
 const DB = {
   db: null,
   open() {
@@ -303,6 +303,7 @@ const STD = { '180F':0x180F, '181A':0x181A, '180A':0x180A, '2A19':0x2A19, '2A6E'
 const uuidOf = h => STD[h] ?? U128(h);
 const CUSTOM_SVCS = ['B200','B300','B400','CD00','CE00','CF00','DA00','DD00','EE00','FA00','FC00'];
 
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('tiempo de conexión agotado')), ms))]);
 const Sensor = {
   device: null, server: null, chr: {}, Q: Promise.resolve(), expectingDisc: false, manual: false, info: {},
   onChange: () => {},
@@ -325,7 +326,7 @@ const Sensor = {
       try {
         for (let i = 0; i < tries; i++) {
           if (this.connected()) return;
-          try { await this.open(); return; } catch (e) { await sleep(1500); }
+          try { await withTimeout(this.open(), 8000); return; } catch (e) { try { this.device.gatt.disconnect(); } catch (_) {} await sleep(1500); }
         }
         throw new Error('No se pudo reconectar con el sensor');
       } finally { this._rc = null; }
@@ -430,13 +431,19 @@ const Sensor = {
     return out;
   },
   /* Reconexión tras el corte: reintenta enseguida, sin espera fija */
-  async reconnectFast(maxMs=15000) {
-    const t = performance.now();
+  async reconnectFast(maxMs=30000) {
+    const t = performance.now(); let n = 0, last = '';
     while (performance.now() - t < maxMs) {
       if (this.connected()) return;
-      try { await this.open(); return; } catch (e) { await sleep(400); }
+      try { await withTimeout(this.open(), 8000); if (n) log(`Reconectado al intento ${n + 1}`); return; }
+      catch (e) {
+        n++; last = e.message;
+        // Android: un intento fallido puede dejar la conexión «a medias»; se limpia antes de reintentar
+        try { this.device.gatt.disconnect(); } catch (_) {}
+        await sleep(Math.min(400 + n*400, 2500));   // espera creciente: el sensor tarda en volver a anunciarse
+      }
     }
-    throw new Error('No se pudo reconectar con el sensor');
+    throw new Error(`No se pudo reconectar con el sensor (${n} intentos${last ? ': ' + last : ''})`);
   },
   notifyMode: undefined,   // undefined = sin comprobar, true = el sensor envía los bloques por notificación, false = no
   async _armNotify() {
@@ -1642,15 +1649,37 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId }) {
   busy = true; setChip();
   try {
     try { const st = await Sensor.status(); meas.sensor.temp = st.temp; meas.sensor.battery = st.battery; } catch (e) {}
-    for (let r = 0; r < cfg.navg; r++) for (const ax of axes) {
+    let partial = null;
+    avg: for (let r = 0; r < cfg.navg; r++) for (const ax of axes) {
+      if (partial != null) break avg;
       const d = om[ax], tag = `${DNAME[d]} (${ax})${cfg.navg > 1 ? ` · ${r+1}/${cfg.navg}` : ''}`;
-      const cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
-        onStage: st => prog(step/total, `${tag}: ${st}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
+      let cg = null;
+      for (let att = 0; att < 3 && !cg; att++) {
+        try {
+          if (att) { prog(step/total, `${tag}: reintentando (${att + 1}/3)…`); log(`${tag}: reintento ${att + 1}/3`, 'warn'); if (!Sensor.connected()) await Sensor.reconnect(10); }
+          cg = await Sensor.measureAxis(codes[ax], cfg.mode, { quiet, block,
+            onStage: st => prog(step/total, `${tag}: ${st}…`), onProg: f => prog((step + f)/total), onRec: (on, acq) => recIndicator(on, acq) });
+        } catch (e) {
+          log(`${tag}: ${e.message}`, 'warn');
+          if (att === 2) {
+            const have = axes.every(a => meas.dirs[om[a]]?.length);
+            if (have && confirm(`No se pudo completar el promedio ${r+1}/${cfg.navg} (${e.message}).\n\n¿Guardar la medida con ${r === 1 ? 'el promedio ya hecho' : 'los ' + r + ' promedios ya hechos'}?`)) { partial = r; break; }
+            throw e;
+          }
+          await sleep(1500);
+        }
+      }
+      if (partial != null) break;
       (meas.dirs[d] ||= []).push(cg);
       for (const [k, v] of Object.entries(Sensor.lastTiming || {})) timing[k] = (timing[k] || 0) + v;
       step++;
     }
-    timing.total = (performance.now() - tStart)/1000; timing.ejes = total;
+    if (partial != null) {   // se guardan solo promedios completos (todas las direcciones)
+      for (const d of Object.keys(meas.dirs)) meas.dirs[d] = meas.dirs[d].slice(0, partial);
+      meas.cfg.navgDone = partial; meas.note = ((meas.note || '') + ` [${partial} de ${cfg.navg} promedios]`).trim();
+      log(`Medida guardada con ${partial} de ${cfg.navg} promedios`, 'warn');
+    }
+    timing.total = (performance.now() - tStart)/1000; timing.ejes = step;
     meas.timing = timing; pref.set('lastTiming', { ...timing, when: nowIso(), mode: cfg.mode });
     log(`Tiempos: ${fmtTiming(timing)}`);
     meas.overall = overallOf(meas);
