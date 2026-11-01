@@ -259,7 +259,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.0';
+const APP_VERSION = '5.1';
 const DB = {
   db: null,
   open() {
@@ -1121,7 +1121,7 @@ function kinFreqs(mach, rpm) {
       for (let h = 1; h <= n; h++) add(h + '×', h*fr, true, `${h} × (${eje}) · serie de holguras`);
     } else if (k.type === 'recip') {
       const st = k.strokes == 2 ? 1 : 0.5, mx = k.max || 6;
-      for (let o = st; o <= mx + 1e-9; o += st) add(String(+o.toFixed(1)).replace('.', ',') + '×', o*fr, Number.isInteger(o) || o === 0.5, `${fx(o)} × (${eje}) · orden del motor de ${k.strokes == 2 ? 2 : 4} tiempos`);
+      for (let o = st; o <= mx + 1e-9; o += st) add(String(+o.toFixed(1)).replace('.', ',') + '×', o*fr, true, `${fx(o)} × (${eje}) · orden del motor de ${k.strokes == 2 ? 2 : 4} tiempos`);
       if (k.cyl > 0) { const fo = k.cyl*fr*(k.strokes == 2 ? 1 : 0.5); why = `${k.cyl} cilindros × ${k.strokes == 2 ? '1' : '0,5'} × (${eje}) · frecuencia de encendido`; add('Encendido', fo); add('2×Enc.', 2*fo, false); }
     } else if (k.type === 'bearing') {
       const o = bearingOrders(k), geo = (k.n > 0 && k.bd > 0 && k.pd > 0) ? `geometría: ${k.n} bolas, Pd ${fx(k.pd)}, Bd ${fx(k.bd)}, ${fx(k.ang || 0)}°` : 'órdenes del fabricante';
