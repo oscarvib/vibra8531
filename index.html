@@ -205,6 +205,14 @@ body.compact #alm .alarmbox>div{display:none}
 body.compact #alm .alarmbox{padding:8px 12px;margin-top:8px}
 body.compact #curBox>p.hint{display:none}
 .cmpsum{display:none}
+body.compact .recdock{position:sticky;bottom:calc(84px + env(safe-area-inset-bottom));z-index:5;padding:10px 14px;box-shadow:0 -2px 14px rgba(0,0,0,.10)}
+body.compact .recdock .recbar{justify-content:center}
+body.compact .recdock{padding:8px 12px}
+body.compact .recdock .recbar button.rec{width:56px;height:56px}
+body.compact .recdock .recbar button.ctl{width:46px;height:46px;font-size:20px}
+body.compact .recdock .pmsg:empty{display:none}
+body.compact .recdock .prog{margin:6px 0 0}
+body.compact #cvL{height:230px!important}
 body.compact .cmp-noh>h3,body.compact .cmp-x{display:none}
 body.compact .card .secbtn[data-open="prep"]{margin-top:0}
 body.compact .cmpsum{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:8px;font-size:15px}
@@ -302,7 +310,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.4';
+const APP_VERSION = '5.5';
 const DB = {
   db: null,
   open() {
@@ -2094,6 +2102,12 @@ async function vFree() {
     route();
   };
   setChip();
+  if (compact()) {   // vista simplificada: preparar arriba, espectro en medio y botones de grabar abajo
+    const dock = document.createElement('div'); dock.className = 'card recdock'; dock.dataset.main = '1';
+    dock.append($('.recbar'), $('#pauseActs'), $('#prog'), $('#pmsg'));
+    $('#liveCard').after(dock);
+    dock.querySelector('.recbar').style.marginTop = '0';
+  }
   bindLive();
   $('#bRec').onclick = async () => {
     if (busy || !Sensor.connected() || freeLive) return;
