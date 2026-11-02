@@ -205,6 +205,8 @@ body.compact #alm .alarmbox>div{display:none}
 body.compact #alm .alarmbox{padding:8px 12px;margin-top:8px}
 body.compact #curBox>p.hint{display:none}
 .cmpsum{display:none}
+body.compact .cmp-noh>h3,body.compact .cmp-x{display:none}
+body.compact .card .secbtn[data-open="prep"]{margin-top:0}
 body.compact .cmpsum{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:8px;font-size:15px}
 .cmp-hid{display:none!important}
 body.compact .grid{display:flex!important;flex-direction:column;gap:12px}
@@ -300,7 +302,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.3';
+const APP_VERSION = '5.4';
 const DB = {
   db: null,
   open() {
@@ -1025,7 +1027,7 @@ function applyCompact() {
   const cur = secParam(), open = cur && root.querySelector(`[data-sec="${CSS.escape(cur)}"]`);
   for (const el of secs) {
     if (open && el.contains(open)) continue;   // la abierta y sus contenedores no se pliegan
-    const sum = el.dataset.sumfn === 'orient' ? orientText(readOrient()) : (el.dataset.sum || '');
+    const sum = el.dataset.sumfn === 'orient' ? orientText(readOrient()) : el.dataset.sumfn === 'free' ? freeSum() : (el.dataset.sum || '');
     el.insertAdjacentHTML('beforebegin', `<button type="button" class="secbtn" data-open="${esc(el.dataset.sec)}"><span class="sm2"><span>${esc(secTitle(el))}</span>${sum ? `<span class="ss">${esc(sum)}</span>` : ''}</span><span class="chev">›</span></button>`);
     el.classList.add('cmp-hid');
   }
@@ -1045,6 +1047,10 @@ function applyCompact() {
   const h2 = root.querySelector('.titlebar h2');
   $('#hTitle').textContent = open ? secTitle(open) : (h2?.textContent.trim() || 'Vibra 8531');
 }
+const freeSum = () => { try {
+  const rpm = $('#mRpm')?.value, load = $('#mLoad')?.value, nv = +$('#fNavg').value;
+  return [modeLabel(+$('#fMode').value).split(' · ')[0], (nv || '∞') + ' prom.', dirsTxt($('#fDirs').value), rpm ? rpm + ' rpm' : '', load ? load + ' %' : '', POSN[normOrient(readOrient()).pos]].filter(Boolean).join(' · ');
+} catch (e) { return ''; } };
 /* ---------- Pantalla de inicio (vista simplificada) ---------- */
 async function vHome() {
   const myDev = pref.get('device', '');
@@ -2014,12 +2020,13 @@ async function vFree() {
   const loose = (await DB.all('measurements')).filter(x => !x.pointId).sort(byWhen);
   const c = pref.get('freeCfg', { mode: 1, navg: 1, win: 1 }), o = pref.get('freeOrient', orientDefault), ftpl = pref.get('freeTpl', TPL_DEF);
   view.innerHTML = `
-    <div class="titlebar"><div><h2>Medida libre</h2><div class="sub">Mide sin ruta para explorar. Si interesa, guárdala después en un punto.</div></div></div>
+    <div class="titlebar mt"><div><h2>Medida libre</h2><div class="sub">Mide sin ruta para explorar. Si interesa, guárdala después en un punto.</div></div></div>
     <div class="grid two">
       <div class="col">
-        <div class="card" data-main="1">
+        <div class="card cmp-noh" data-main="1">
           <h3>Configuración</h3>
-          <div data-fold="fcfg" data-title="⚙ Rango, promedios, ventana, perfil" data-sum="${esc(modeLabel(c.mode).split(' · ')[0])} · ${c.navg || '∞'} prom. · ${dirsTxt(c.dirs)}">
+          <div data-sec="prep" data-title="⚙ Preparar la medida" data-sumfn="free">
+          <div>
           <label class="field"><span>Rango</span><select id="fMode">${MODES.map((_, m) => `<option value="${m}" ${m === c.mode ? 'selected' : ''}>${modeLabel(m)}</option>`).join('')}</select></label>
           <div class="row" style="margin-top:10px">
             <label class="field"><span>Promedios</span><select id="fNavg">${[1,2,4,8,16,0].map(n => `<option value="${n}" ${n === c.navg ? 'selected' : ''}>${n || '∞ continuo'}</option>`).join('')}</select></label>
@@ -2034,6 +2041,7 @@ async function vFree() {
           </div>
           <div data-sec="sensor" data-title="📍 Posición del sensor" data-sumfn="orient">${orientHTML(o)}</div>
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="p. ej. ventilador sala máquinas, carcasa lado libre"></label>
+          </div>
           <div class="recbar">
             <button id="bRec" class="rec" title="Grabar" aria-label="Grabar"><i></i></button>
             <button id="bPause" class="ctl" title="Pausa" aria-label="Pausa" disabled>⏸</button>
@@ -2046,14 +2054,14 @@ async function vFree() {
         <div class="card" id="liveCard" data-main="1" hidden>
           <h3>En directo<span class="sp"></span><span class="hint" id="liveInfo"></span></h3>
           <div class="seg" id="lSeg"></div>
-          <div class="row" style="margin:8px 0;align-items:flex-end">
+          <div class="row" style="margin:8px 0;align-items:flex-end" data-fold="lopt" data-title="⚙ Opciones del espectro">
             <label class="field"><span>Unidades</span><select id="lUnit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option></select></label>
             <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogX"> Log X</label>
             <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogY"> Log Y</label>
             <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lFollow" checked> Seguir dirección</label>
           </div>
           <canvas id="cvL" style="height:280px"></canvas>
-          <p class="note">Gris: espectro <b>instantáneo</b> (último bloque). Color: <b>promedio</b> acumulado. Arrastra para hacer zoom · doble clic = 1:1.</p>
+          <p class="note cmp-x">Gris: espectro <b>instantáneo</b> (último bloque). Color: <b>promedio</b> acumulado. Arrastra para hacer zoom · doble clic = 1:1.</p>
         </div>
       </div>
       <div class="col">
@@ -2116,17 +2124,21 @@ function setRecUI() {
   for (const id of ['#fMode','#fNavg','#fWin','#fDirs','#fFcut']) if ($(id)) $(id).disabled = !!L;
   $('#recState').textContent = !L ? (Sensor.connected() ? 'Listo para grabar' : compact() ? 'Toca ● para conectar el sensor' : 'Conecta el sensor') : L.pending === 'reset' ? 'Reiniciando al terminar el bloque…'
     : st === 'paused' ? 'En pausa' : L.ctl.paused ? 'Pausando al terminar el bloque…' : 'Grabando';
-  $('#liveCard').hidden = !L;
+  $('#liveCard').hidden = !L && !compact();
 }
 function bindLive() {
   setRecUI();
-  if (!freeLive) return;
+  if (!freeLive) {   // vista simplificada: el hueco del espectro se ve desde el principio
+    if (compact() && $('#cvL')) { $('#lSeg').innerHTML = ''; $('#cvL').dataset.ph = '1'; new Plot($('#cvL'), { xlab: 'Frecuencia (Hz)', empty: 'Pulsa ● para empezar a grabar' }).draw(); }
+    return;
+  }
   const L = freeLive;
   $('#lUnit').value = L.unit; $('#lLogX').checked = L.logX; $('#lLogY').checked = L.logY; $('#lFollow').checked = L.follow;
   drawLive();
 }
 function drawLive() {
-  const L = freeLive, cv = $('#cvL'); if (!L || !cv) return;
+  const L = freeLive; let cv = $('#cvL'); if (!L || !cv) return;
+  if (cv.dataset.ph) { const n = cv.cloneNode(); delete n.dataset.ph; cv.replaceWith(n); cv = n; }   // fuera el gráfico vacío de espera
   setRecUI();
   if (L.plotCv !== cv) {   // la pantalla se ha redibujado: nuevo gráfico y controles
     L.plotCv = cv; L.plot = new Plot(cv, { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz' });
