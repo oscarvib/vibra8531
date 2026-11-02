@@ -188,16 +188,24 @@ body.op .adm{display:none!important}
 .recbar button.ctl{width:52px;height:52px;font-size:22px;line-height:1}
 .recst{display:flex;flex-direction:column;min-width:120px}
 /* ---- vista simplificada (botones) ---- */
-.hnav,.htitle{display:none}
-body.compact .hnav{display:grid;place-items:center;width:40px;height:40px;padding:0;border-radius:10px;font-size:20px;line-height:1;flex:0 0 auto}
-body.compact header{gap:6px;padding:8px 10px}
+.cnav,.htitle{display:none}
+body.compact .cnav{display:flex;gap:22px;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:12}
+.cnav button{width:58px;height:58px;border-radius:50%;padding:0;display:grid;place-items:center;background:var(--card);color:var(--fg);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.cnav button:active{transform:scale(.94)}
+body.compact header{gap:8px;padding:10px 14px}
 body.compact header h1{display:none}
 body.compact .htitle{display:block;flex:1;min-width:0;font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.compact header .sp{display:none}
 body.compact #bConn{display:none}
 body.compact .chip{cursor:pointer;max-width:34vw}
 body.compact .bottomnav,body.compact .crumbs{display:none}
-body.compact main{padding-bottom:28px}
+body.compact main{padding-bottom:96px}
+body.compact .titlebar.mt{display:none}
+body.compact #alm .alarmbox>div{display:none}
+body.compact #alm .alarmbox{padding:8px 12px;margin-top:8px}
+body.compact #curBox>p.hint{display:none}
+.cmpsum{display:none}
+body.compact .cmpsum{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:8px;font-size:15px}
 .cmp-hid{display:none!important}
 body.compact .grid{display:flex!important;flex-direction:column;gap:12px}
 body.compact .grid>.col{display:contents}
@@ -222,8 +230,6 @@ body.compact #mkKey,body.compact #sInfo{display:none}
 </head>
 <body>
 <header>
-  <button class="hnav" id="bBack" aria-label="Atrás" title="Atrás">←</button>
-  <button class="hnav" id="bHome" aria-label="Inicio" title="Inicio">⌂</button>
   <h1 onclick="location.hash='#/'">Vibra <b>8531</b></h1>
   <div class="htitle" id="hTitle"></div>
   <span class="chip" id="chip">Desconectado</span>
@@ -238,6 +244,7 @@ body.compact #mkKey,body.compact #sInfo{display:none}
   <a href="#/sync" id="navY">Sincronizar</a>
   <a href="#/ajustes" id="navS">Ajustes</a>
 </nav>
+<div class="cnav"><button id="bBack" aria-label="Atrás" title="Atrás"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button><button id="bHome" aria-label="Inicio" title="Inicio"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h5v-6h3v6h5V10"/></svg></button></div>
 <dialog id="dlg"></dialog>
 
 <script>
@@ -293,7 +300,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.2';
+const APP_VERSION = '5.3';
 const DB = {
   db: null,
   open() {
@@ -2030,7 +2037,7 @@ async function vFree() {
           <div class="recbar">
             <button id="bRec" class="rec" title="Grabar" aria-label="Grabar"><i></i></button>
             <button id="bPause" class="ctl" title="Pausa" aria-label="Pausa" disabled>⏸</button>
-            <button id="bReset" class="ctl" title="Reiniciar" aria-label="Reiniciar" disabled>⟲</button>
+            <button id="bReset" class="ctl" title="Reiniciar" aria-label="Reiniciar" disabled>⏮</button>
             <div class="recst"><b id="recState">Listo</b><span id="recTime" class="hint"></span></div>
           </div>
           <div id="pauseActs" class="row" style="margin-top:10px;display:none"><button class="pri" id="bSaveNow">💾 Guardar lo adquirido</button><button class="danger" id="bDiscardNow">Descartar</button></div>
@@ -2288,13 +2295,14 @@ async function vMeas(id) {
     ${free ? `<div class="card" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-color:var(--acc)">
       <div style="flex:1;min-width:200px"><b>Medida libre</b><div class="hint">${isOp() ? 'No está asignada a ningún punto. Se enviará a la oficina con las demás medidas para que la revisen.' : 'No está asignada a ningún punto. Guárdala si quieres conservarla en el historial de una máquina.'}</div></div>
       <button class="pri adm" id="bSaveTo">Guardar en un punto…</button></div>` : ''}
-    <div class="titlebar"><div><h2>${fdate(ms.when)}</h2>
+    <div class="titlebar mt"><div><h2>${fdate(ms.when)}</h2>
       <div class="sub">${ms.rpm ? fmt(ms.rpm, 5) + ' rpm' : 'sin rpm'} · ${ms.load != null ? 'carga ' + fmt(ms.load, 3) + ' %' : 'sin carga'} · sensor ${esc(orientText(ms.orient))}${ms.note ? ' · ' + esc(ms.note) : ''}${ms.demo ? ' · <span class="tag">ejemplo</span>' : ''}</div></div>
       <span class="sp"></span>
       <button class="sm" id="bPrev" ${prev ? '' : 'disabled'} title="Anterior">‹</button><button class="sm" id="bNext" ${next ? '' : 'disabled'} title="Siguiente">›</button></div>
     <div class="card" style="margin-bottom:12px">
       <div class="seg" id="dSeg">${dirsHere.map(d => `<button data-d="${d}" style="--c:var(${DCOL[d]})" class="${d === mvState.dir ? 'on' : ''}">${DNAME[d]}</button>`).join('')}</div>
       <div id="alm"></div>
+      <div class="cmpsum" id="cmpSum"></div>
       <div class="kpis" id="kpis" style="margin-top:12px"></div>
       <p class="note">Perfil: ${profNote(tpl)}. ${esc(modeLabel(ms.cfg.mode))} · ${ms.cfg.navg} prom. · ${WIN_NAME[ms.cfg.win]} · corte ${fmt(fcutOf(ms.cfg), 3)} Hz${ms.quiet ? '' : ' · medida con Bluetooth activo'}.</p>
     </div>
@@ -2327,7 +2335,7 @@ async function vMeas(id) {
       <div class="col">
         <div class="card" data-main="1">
           <h3>Espectro<span class="sp"></span><button class="sm" data-z="10">0–10×</button><button class="sm" id="yIn" title="Ampliar eje Y">Y ×2</button><button class="sm" id="yOut" title="Reducir eje Y">Y ÷2</button><button class="sm" data-z="all">1:1</button></h3>
-          <div class="row" style="margin-bottom:8px" data-fold="spopt" data-title="⚙ Unidades, escalas, cursor, marcadores, comparar">
+          <div class="row" style="margin-bottom:8px" data-fold="spopt" data-title="⚙ Opciones del espectro">
             <label class="field"><span>Unidades</span><select id="unit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option><option value="gpk">Aceleración g pico</option></select></label>
             <label class="field" style="flex:0 0 auto"><span>Eje Y</span><select id="yscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
             <label class="field" style="flex:0 0 auto"><span>Eje X</span><select id="xscale"><option value="lin">Lineal</option><option value="log">Log</option></select></label>
@@ -2353,6 +2361,16 @@ async function vMeas(id) {
   $('#xscale').value = mvState.xscale; $('#cmode').value = mvState.cmode; $('#cnh').value = mvState.cnh; $('#wNh').style.display = mvState.cmode === 'harm' ? '' : 'none';
   const win = ms.cfg.win ?? 1;
   if (!free) $('#alm').innerHTML = alBox(evalAlarm(ms.overall, pt, m), 'Sin alarmas: todos los valores dentro de los límites del punto');
+  if (compact()) {   // vista simplificada: espectro a la vista y todo lo demás dentro de «Más información»
+    const kp = $('#kpis'), nt = kp.nextElementSibling, grid = view.querySelector('.grid.two');
+    const vals = document.createElement('div'); vals.className = 'card';
+    vals.innerHTML = `<h3>📊 Valores${free ? '' : ' y alarma'}</h3>${free ? '' : `<div>${alBox(evalAlarm(ms.overall, pt, m), 'Sin alarmas: todos los valores dentro de los límites del punto')}</div>`}`;
+    vals.append(kp); if (nt?.classList.contains('note')) vals.append(nt);
+    const more = document.createElement('div');
+    Object.assign(more.dataset, { sec: 'mas', title: '📋 Más información', sum: 'Valores, órdenes, frecuencias de fallo, picos, señal temporal, datos' });
+    more.append(vals, ...[...grid.querySelectorAll('.card')].filter(c => !c.dataset.main));
+    grid.append(more);
+  }
   const plotS = new Plot($('#cvS'), { xlab: 'Frecuencia (Hz)', xfmt: x => fmt(x, 5) + ' Hz', tipExtra: f => f1 ? `  · ${(f/f1).toFixed(2)}×` : '' });
   const plotT = new Plot($('#cvT'), { xlab: 'Tiempo (s)', ylab: 'g', yunit: 'g', xfmt: x => fmt(x, 5) + ' s' });
   let refMeas = mvState.ref ? await DB.get('measurements', mvState.ref) : null;
@@ -2366,6 +2384,7 @@ async function vMeas(id) {
       <div class="kpi"><div class="l">Aceleración RMS</div><div class="v">${fmt(ov.arms)}<small>g</small></div><div class="s">${fmt(ov.arms*G, 3)} m/s²</div></div>
       <div class="kpi"><div class="l">Aceleración pico</div><div class="v">${fmt(ov.apk)}<small>g</small></div><div class="s">Factor de cresta ${fmt(ov.cf, 2)}</div></div>
       <div class="kpi"><div class="l">1×${f1 ? ' · ' + fmt(f1, 4) + ' Hz' : ''}</div><div class="v">${fmt(a1?.y)}<small>mm/s</small></div><div class="s">${a1 ? 'en ' + fmt(a1.f, 4) + ' Hz · por banda' : 'sin rpm'}</div></div>`;
+    if ($('#cmpSum')) $('#cmpSum').innerHTML = `<span>${DNAME[d]}: <b style="font-size:20px">${fmt(ov.v)}</b> mm/s</span>${f1 ? `<span class="hint">1× ${fmt(a1?.y)} mm/s</span>` : ''}<span class="hint">${fmt(ms.rpm, 5) || '–'} rpm</span>`;
     plotS.ylab = UNIT[unit]; plotS.yunit = unit === 'vrms' ? 'mm/s' : 'g';
     plotS.logY = mvState.yscale === 'log'; plotS.zeroBase = !plotS.logY; plotS.logX = mvState.xscale === 'log';
     plotS.series = [{ name: refMeas ? fday(ms.when) : '', x: sp.f, y, color: DCOL[d] }];
