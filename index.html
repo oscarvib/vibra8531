@@ -310,7 +310,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.5';
+const APP_VERSION = '5.6';
 const DB = {
   db: null,
   open() {
@@ -1035,7 +1035,7 @@ function applyCompact() {
   const cur = secParam(), open = cur && root.querySelector(`[data-sec="${CSS.escape(cur)}"]`);
   for (const el of secs) {
     if (open && el.contains(open)) continue;   // la abierta y sus contenedores no se pliegan
-    const sum = el.dataset.sumfn === 'orient' ? orientText(readOrient()) : el.dataset.sumfn === 'free' ? freeSum() : (el.dataset.sum || '');
+    const sum = el.dataset.sumfn === 'orient' ? orientText(readOrient()) : ['free', 'prep'].includes(el.dataset.sumfn) ? freeSum() : (el.dataset.sum || '');
     el.insertAdjacentHTML('beforebegin', `<button type="button" class="secbtn" data-open="${esc(el.dataset.sec)}"><span class="sm2"><span>${esc(secTitle(el))}</span>${sum ? `<span class="ss">${esc(sum)}</span>` : ''}</span><span class="chev">›</span></button>`);
     el.classList.add('cmp-hid');
   }
@@ -1056,8 +1056,9 @@ function applyCompact() {
   $('#hTitle').textContent = open ? secTitle(open) : (h2?.textContent.trim() || 'Vibra 8531');
 }
 const freeSum = () => { try {
-  const rpm = $('#mRpm')?.value, load = $('#mLoad')?.value, nv = +$('#fNavg').value;
-  return [modeLabel(+$('#fMode').value).split(' · ')[0], (nv || '∞') + ' prom.', dirsTxt($('#fDirs').value), rpm ? rpm + ' rpm' : '', load ? load + ' %' : '', POSN[normOrient(readOrient()).pos]].filter(Boolean).join(' · ');
+  const rpm = $('#mRpm')?.value, load = $('#mLoad')?.value, f = !!$('#fMode'), nv = f ? +$('#fNavg').value : 0;
+  return [f ? modeLabel(+$('#fMode').value).split(' · ')[0] : '', f ? (nv || '∞') + ' prom.' : '', f ? dirsTxt($('#fDirs').value) : '',
+    rpm ? rpm + ' rpm' : (f ? '' : '⚠ faltan rpm'), load ? 'carga ' + load + ' %' : (f ? '' : '⚠ falta la carga'), $('#sensorPick, [data-sec="sensor"]') ? POSN[normOrient(readOrient()).pos] : ''].filter(Boolean).join(' · ');
 } catch (e) { return ''; } };
 /* ---------- Pantalla de inicio (vista simplificada) ---------- */
 async function vHome() {
@@ -1674,6 +1675,7 @@ async function vPoint(id) {
       <div class="col">
         <div class="card" data-main="1">
           <h3>Nueva medida</h3>
+          <div data-sec="prep" data-title="⚙ Preparar la medida" data-sumfn="prep">
           <div class="row">
             <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="mRpm" inputmode="decimal" min="1" step="any" value="${lastRpm ?? ''}"></label>
             <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${lastLoad}" placeholder="0–100"></label>
@@ -1681,10 +1683,10 @@ async function vPoint(id) {
           <div data-sec="sensor" data-title="📍 Posición del sensor" data-sumfn="orient">${orientHTML(o)}</div>
           <div class="row adm" style="margin-top:8px"><button class="sm" id="bFixPos">📌 Fijar esta posición en el punto</button>${o?.fixed ? '<button class="sm" id="bUnfixPos">Quitar fijación</button>' : ''}</div>
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional: estado, observaciones…"></label>
-          <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
-          <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
-          <p class="note">Tiempo estimado ~${estS} s: se mide${(cfg.dirs || 'HVA').length > 1 ? 'n' : ''} ${dirsTxt(cfg.dirs)} uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
+          </div>
+          <p class="note cmp-x">Tiempo estimado ~${estS} s: se mide${(cfg.dirs || 'HVA').length > 1 ? 'n' : ''} ${dirsTxt(cfg.dirs)} uno tras otro${cfg.navg > 1 ? `, ${cfg.navg} veces cada uno` : ''}.</p>
         </div>
+        ${liveHTML()}
       </div>
       <div class="col">
         <div class="card">
@@ -1761,7 +1763,9 @@ async function vPoint(id) {
   };
   // medir
   setChip();
-  $('#bMeas').onclick = () => measurePoint(pt, m);
+  bindLive('point:' + pt.id);
+  $('#bRec').onclick = () => recPoint({ pt, mach: m, ctx: 'point:' + pt.id,
+    after: meas => { if (meas) location.hash = '#/m/' + meas.id; else route(); } });
 }
 
 /* ---------- Posición del sensor con dibujo ---------- */
@@ -1967,17 +1971,19 @@ async function runMeasure({ cfg, orient, rpm, load, note, pointId, roundId, ctl 
     return null;
   } finally { busy = false; recIndicator(false); setChip(); ctl?.onState?.('idle'); }
 }
-async function measurePoint(pt, mach) {
-  if (busy || !Sensor.connected()) return;
+/* Grabar en un punto (ruta o base de datos): pide rpm y carga, mide con espectro en directo y guarda la posición */
+async function recPoint({ pt, mach, ctx, roundId, after }) {
+  if (busy || !Sensor.connected() || freeLive) return;
   const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
-  if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
-  if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
+  const ask = (el, msg) => { if (compact() && $('[data-sec="prep"]')?.classList.contains('cmp-hid')) openSec('prep'); setTimeout(() => $(el)?.focus(), 50); alert(msg); };
+  if (!(rpm > 0)) return ask('#mRpm', 'Introduce las revoluciones (rpm) de la máquina.');
+  if (!(load >= 0 && load <= 150)) return ask('#mLoad', 'Introduce la carga en % (0–100).');
   const orient = readOrient();
-  const meas = await runMeasure({ cfg: pt.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: pt.id });
-  if (!meas) return;
-  if (!pt.orient?.fixed) pt.orient = orient;
-  await DB.put('points', pt); await refreshPointLast(pt.id);
-  location.hash = '#/m/' + meas.id;
+  await startRec({ ctx, cfg: pt.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: pt.id, roundId,
+    after: async meas => {
+      if (meas) { if (!pt.orient?.fixed) pt.orient = orient; await DB.put('points', pt); await refreshPointLast(pt.id); }
+      await after(meas, { rpm, load });
+    } });
 }
 
 const TNAME = { config: 'configuración', grabacion: 'grabación', corte: 'corte BLE', reconexion: 'reconexión', descarga: 'descarga' };
@@ -2050,27 +2056,8 @@ async function vFree() {
           <div data-sec="sensor" data-title="📍 Posición del sensor" data-sumfn="orient">${orientHTML(o)}</div>
           <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="p. ej. ventilador sala máquinas, carcasa lado libre"></label>
           </div>
-          <div class="recbar">
-            <button id="bRec" class="rec" title="Grabar" aria-label="Grabar"><i></i></button>
-            <button id="bPause" class="ctl" title="Pausa" aria-label="Pausa" disabled>⏸</button>
-            <button id="bReset" class="ctl" title="Reiniciar" aria-label="Reiniciar" disabled>⏮</button>
-            <div class="recst"><b id="recState">Listo</b><span id="recTime" class="hint"></span></div>
-          </div>
-          <div id="pauseActs" class="row" style="margin-top:10px;display:none"><button class="pri" id="bSaveNow">💾 Guardar lo adquirido</button><button class="danger" id="bDiscardNow">Descartar</button></div>
-          <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
         </div>
-        <div class="card" id="liveCard" data-main="1" hidden>
-          <h3>En directo<span class="sp"></span><span class="hint" id="liveInfo"></span></h3>
-          <div class="seg" id="lSeg"></div>
-          <div class="row" style="margin:8px 0;align-items:flex-end" data-fold="lopt" data-title="⚙ Opciones del espectro">
-            <label class="field"><span>Unidades</span><select id="lUnit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option></select></label>
-            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogX"> Log X</label>
-            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogY"> Log Y</label>
-            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lFollow" checked> Seguir dirección</label>
-          </div>
-          <canvas id="cvL" style="height:280px"></canvas>
-          <p class="note cmp-x">Gris: espectro <b>instantáneo</b> (último bloque). Color: <b>promedio</b> acumulado. Arrastra para hacer zoom · doble clic = 1:1.</p>
-        </div>
+        ${liveHTML()}
       </div>
       <div class="col">
         <div class="card">
@@ -2102,29 +2089,52 @@ async function vFree() {
     route();
   };
   setChip();
-  if (compact()) {   // vista simplificada: preparar arriba, espectro en medio y botones de grabar abajo
-    const dock = document.createElement('div'); dock.className = 'card recdock'; dock.dataset.main = '1';
-    dock.append($('.recbar'), $('#pauseActs'), $('#prog'), $('#pmsg'));
-    $('#liveCard').after(dock);
-    dock.querySelector('.recbar').style.marginTop = '0';
-  }
-  bindLive();
+  bindLive('free');
   $('#bRec').onclick = async () => {
     if (busy || !Sensor.connected() || freeLive) return;
     saveCfg();
     const rpm = +$('#mRpm').value || null, load = $('#mLoad').value === '' ? null : +$('#mLoad').value;
     const orient = readOrient(), cfg = pref.get('freeCfg');
     pref.set('freeOrient', orient); pref.set('freeRpm', rpm);
-    const L = freeLive = { state: 'rec', meas: null, r: 0, dir: null, follow: true, unit: pref.get('liveUnit', 'vrms'), logX: pref.get('liveLogX', false), logY: pref.get('liveLogY', false),
-      want: DIRS.filter(d => (cfg.dirs || 'HVA').includes(d)), navg: cfg.navg, pending: '' };
-    L.ctl = { paused: false, cmd: null,
-      onBlock: (d, cg, meas, r) => { L.meas = meas; L.r = r; if (!d) L.dir = null; else if (L.follow || !L.dir) L.dir = d; drawLive(); },
-      onState: st => { if (st === 'paused') L.state = 'paused'; else if (st === 'rec') { L.state = 'rec'; L.pending = ''; } setRecUI(); } };
-    setRecUI(); drawLive();
-    const meas = await runMeasure({ cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: null, ctl: L.ctl });
-    freeLive = null;
-    if (meas) location.hash = '#/m/' + meas.id; else route();
+    await startRec({ ctx: 'free', cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: null,
+      after: meas => { if (meas) location.hash = '#/m/' + meas.id; else route(); } });
   };
+}
+/* Bloque común de grabación: espectro en directo + botones (libre, ronda y punto) */
+const liveHTML = () => `
+        <div class="card" id="liveCard" data-main="1" hidden>
+          <h3>En directo<span class="sp"></span><span class="hint" id="liveInfo"></span></h3>
+          <div class="seg" id="lSeg"></div>
+          <div class="row" style="margin:8px 0;align-items:flex-end" data-fold="lopt" data-title="⚙ Opciones del espectro">
+            <label class="field"><span>Unidades</span><select id="lUnit"><option value="vrms">Velocidad mm/s RMS</option><option value="grms">Aceleración g RMS</option></select></label>
+            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogX"> Log X</label>
+            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lLogY"> Log Y</label>
+            <label class="chk" style="flex:0 0 auto"><input type="checkbox" id="lFollow" checked> Seguir dirección</label>
+          </div>
+          <canvas id="cvL" style="height:280px"></canvas>
+          <p class="note cmp-x">Gris: espectro <b>instantáneo</b> (último bloque). Color: <b>promedio</b> acumulado. Arrastra para hacer zoom · doble clic = 1:1.</p>
+        </div>
+        <div class="card recdock" data-main="1">
+          <div class="recbar" style="margin-top:0">
+            <button id="bRec" class="rec" title="Grabar" aria-label="Grabar"><i></i></button>
+            <button id="bPause" class="ctl" title="Pausa" aria-label="Pausa" disabled>⏸</button>
+            <button id="bReset" class="ctl" title="Reiniciar" aria-label="Reiniciar" disabled>⏮</button>
+            <div class="recst"><b id="recState">Listo</b><span id="recTime" class="hint"></span></div>
+          </div>
+          <div id="pauseActs" class="row" style="margin-top:10px;display:none"><button class="pri" id="bSaveNow">💾 Guardar lo adquirido</button><button class="danger" id="bDiscardNow">Descartar</button></div>
+          <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
+        </div>`;
+async function startRec({ ctx, cfg, orient, rpm, load, note, pointId, roundId, after }) {
+  const L = freeLive = { ctx, state: 'rec', meas: null, r: 0, dir: null, follow: true, unit: pref.get('liveUnit', 'vrms'), logX: pref.get('liveLogX', false), logY: pref.get('liveLogY', false),
+    want: DIRS.filter(d => (cfg.dirs || 'HVA').includes(d)), navg: cfg.navg, pending: '' };
+  L.ctl = { paused: false, cmd: null,
+    onBlock: (d, cg, meas, r) => { L.meas = meas; L.r = r; if (!d) L.dir = null; else if (L.follow || !L.dir) L.dir = d; drawLive(); },
+    onState: st => { if (st === 'paused') L.state = 'paused'; else if (st === 'rec') { L.state = 'rec'; L.pending = ''; } setRecUI(); } };
+  setRecUI(); drawLive();
+  if (compact()) setTimeout(() => $('#liveCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);   // el espectro a la vista
+  const meas = await runMeasure({ cfg, orient, rpm, load, note, pointId, roundId, ctl: L.ctl });
+  freeLive = null;
+  await after(meas);
 }
 /* ---------- Grabación libre: controles y espectro en directo ---------- */
 let freeLive = null;   // grabación libre en curso (sobrevive a cambiar de pantalla)
@@ -2140,8 +2150,9 @@ function setRecUI() {
     : st === 'paused' ? 'En pausa' : L.ctl.paused ? 'Pausando al terminar el bloque…' : 'Grabando';
   $('#liveCard').hidden = !L && !compact();
 }
-function bindLive() {
+function bindLive(ctx) {
   setRecUI();
+  if (freeLive && freeLive.ctx !== ctx) freeLive.plotCv = null;
   if (!freeLive) {   // vista simplificada: el hueco del espectro se ve desde el principio
     if (compact() && $('#cvL')) { $('#lSeg').innerHTML = ''; $('#cvL').dataset.ph = '1'; new Plot($('#cvL'), { xlab: 'Frecuencia (Hz)', empty: 'Pulsa ● para empezar a grabar' }).draw(); }
     return;
@@ -2736,7 +2747,7 @@ async function vRound(id) {
     }).join('')}<span class="hint">mm/s · cambio vs ${fday(b.when)}</span></div>`;
   };
   view.innerHTML = crumbs([['#/', 'Rutas'], ['#/r/' + r.id, r.name], [null, 'Ronda ' + fday(rd.started)]]) + `
-    <div class="titlebar"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}${whoTxt(rd) ? ' · ' + esc(whoTxt(rd)) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/r/${rd.id}'">📄 Informe</button></div>
+    <div class="titlebar mt"><div><h2>${esc(r.name)}</h2><div class="sub">${esc(p?.name || '')} · ronda iniciada ${fdate(rd.started)}${finished ? ' · finalizada ' + fdate(rd.finished) : ''}${whoTxt(rd) ? ' · ' + esc(whoTxt(rd)) : ''}</div></div><span class="sp"></span><button class="sm adm" onclick="location.hash='#/inf/r/${rd.id}'">📄 Informe</button></div>
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;font-size:13.5px;font-weight:600"><span>${nDone} de ${pts.length} puntos</span><span>${Math.round(100*nDone/Math.max(1, pts.length))} %</span></div>
       <div class="prog" style="display:block"><i style="width:${100*nDone/Math.max(1, pts.length)}%"></i></div>
@@ -2753,18 +2764,18 @@ async function vRound(id) {
               <div class="row" style="margin-top:12px"><button class="sm" type="button" onclick="location.hash='#/m/${thisMeas.id}'">Ver medida</button>${!finished ? '<button class="sm" id="bRedo">Repetir</button>' : ''}</div>`
             : it?.status === 'skip' ? `<p class="note">Saltado: <b>${esc(it.reason)}</b>${it.comment ? ' · ' + esc(it.comment) : ''}</p>${!finished ? '<button class="sm" id="bRedo">Medir ahora</button>' : ''}` : ''}
           ${!it && !finished ? `
+            <div data-sec="prep" data-title="⚙ Preparar la medida" data-sumfn="prep">
             <div class="row" style="margin-top:12px">
               <label class="field"><span>Velocidad (rpm) *</span><input type="number" id="mRpm" inputmode="decimal" min="1" step="any" value="${sugRpm}"></label>
               <label class="field"><span>Carga (%) *</span><input type="number" id="mLoad" inputmode="decimal" min="0" max="150" step="any" value="${sugLoad}" placeholder="0–100"></label>
             </div>
             <div data-sec="sensor" data-title="📍 Posición del sensor" data-sumfn="orient">${orientHTML(o)}</div>
             <label class="field" style="margin-top:12px"><span>Nota</span><input id="mNote" placeholder="opcional"></label>
-            <div style="margin-top:14px"><button class="pri big" id="bMeas">Medir</button></div>
-            <div class="prog" id="prog"><i></i></div><div class="pmsg" id="pmsg"></div>
-            <div class="row" style="margin-top:6px"><button class="sm" id="bSkip">Saltar punto…</button></div>` : ''}
+            </div>
+            <div class="row" style="margin-top:10px"><button class="sm" id="bSkip">Saltar punto…</button></div>` : ''}
           ${it && !finished && pending.length ? `<div style="margin-top:14px"><button class="pri big" id="bNext">Siguiente punto ›</button></div>` : ''}
           ${!finished && !pending.length ? `<div style="margin-top:14px"><button class="pri big" id="bFinish">Finalizar ronda</button></div>` : ''}
-        </div>` : '<div class="empty">Esta ruta no tiene puntos.</div>'}
+        </div>${!it && !finished ? liveHTML() : ''}` : '<div class="empty">Esta ruta no tiene puntos.</div>'}
         ${!finished && pending.length && nDone ? '<div><button class="sm" id="bFinishEarly">Finalizar ronda sin completar…</button></div>' : ''}
       </div>
       <div class="col">
@@ -2810,22 +2821,14 @@ async function vRound(id) {
     await DB.put('rounds', rd); goNext();
   };
   setChip();
-  if ($('#bMeas')) $('#bMeas').onclick = async () => {
-    if (busy || !Sensor.connected()) return;
-    const rpm = +$('#mRpm').value, load = $('#mLoad').value === '' ? NaN : +$('#mLoad').value;
-    if (!(rpm > 0)) { $('#mRpm').focus(); return alert('Introduce las revoluciones (rpm) de la máquina.'); }
-    if (!(load >= 0 && load <= 150)) { $('#mLoad').focus(); return alert('Introduce la carga en % (0–100).'); }
-    const orient = readOrient();
-    const meas = await runMeasure({ cfg: cur.cfg, orient, rpm, load, note: $('#mNote').value.trim(), pointId: cur.id, roundId: rd.id });
-    if (!meas) return;
-    if (!cur.orient?.fixed) cur.orient = orient;
-    await DB.put('points', cur); await refreshPointLast(cur.id);
+  if ($('#bRec')) { bindLive('round:' + rd.id + ':' + cur.id); $('#bRec').onclick = () => recPoint({ pt: cur, mach, ctx: 'round:' + rd.id + ':' + cur.id, roundId: rd.id, after: async (meas, { rpm, load }) => {
+    if (!meas) { route(); return; }
     const vmax = maxV(meas.overall), pv = maxV(prevMeas?.overall);
     items[cur.id] = { status: 'done', measId: meas.id, when: meas.when, rpm, load, vmax, change: pv > 0 ? 100*(vmax/pv - 1) : null, alarm: evalAlarm(meas.overall, cur, mach).level };
     await DB.put('rounds', rd);
     roundCursor[rd.id] = cur.id;   // quedarse en el punto para ver el resultado
     route(); window.scrollTo(0, 0);
-  };
+  } }); };
 }
 
 
