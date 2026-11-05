@@ -310,7 +310,7 @@ const zoneTag = (v, cls) => { if (v == null || !isFinite(v)) return ''; const z 
 /* =====================================================================
    Base de datos local (IndexedDB) — diseño preparado para sincronizar
    ===================================================================== */
-const APP_VERSION = '5.6';
+const APP_VERSION = '5.7';
 const DB = {
   db: null,
   open() {
@@ -475,7 +475,7 @@ const Sensor = {
         lap('corte');
         onStage('Reconectando');
         await this.reconnectFast();
-        lap('reconexion');
+        lap('reconexion'); T.intentos = this.rcTries || 1;
       } finally { this.expectingDisc = false; }
       await sleep(150);
     } else {
@@ -493,16 +493,24 @@ const Sensor = {
     return out;
   },
   /* Reconexión tras el corte: reintenta enseguida, sin espera fija */
+  /* Como en las versiones ≤ 4.6: reintento rápido cada 400 ms sin cortar el intento en curso.
+     Solo si un intento se queda colgado (> 15 s) se cancela, y a partir del 10.º fallo se espera algo más. */
   async reconnectFast(maxMs=30000) {
     const t = performance.now(); let n = 0, last = '';
+    this.rcTries = 0;
     while (performance.now() - t < maxMs) {
       if (this.connected()) return;
-      try { await withTimeout(this.open(), 8000); if (n) log(`Reconectado al intento ${n + 1}`); return; }
-      catch (e) {
+      const t1 = performance.now();
+      try {
+        await withTimeout(this.open(), 15000);
+        this.rcTries = n + 1;
+        if (n) log(`Reconectado al intento ${n + 1} (${((performance.now() - t)/1000).toFixed(1)} s)`);
+        return;
+      } catch (e) {
         n++; last = e.message;
-        // Android: un intento fallido puede dejar la conexión «a medias»; se limpia antes de reintentar
-        try { this.device.gatt.disconnect(); } catch (_) {}
-        await sleep(Math.min(400 + n*400, 2500));   // espera creciente: el sensor tarda en volver a anunciarse
+        if (n <= 3 || n % 5 === 0) log(`Reconexión: intento ${n} falló tras ${((performance.now() - t1)/1000).toFixed(1)} s (${e.message})`);
+        if (/agotado/.test(e.message)) { try { this.device.gatt.disconnect(); } catch (_) {} }   // solo si se quedó colgado
+        await sleep(n < 10 ? 400 : 1500);
       }
     }
     throw new Error(`No se pudo reconectar con el sensor (${n} intentos${last ? ': ' + last : ''})`);
@@ -1987,7 +1995,7 @@ async function recPoint({ pt, mach, ctx, roundId, after }) {
 }
 
 const TNAME = { config: 'configuración', grabacion: 'grabación', corte: 'corte BLE', reconexion: 'reconexión', descarga: 'descarga' };
-const fmtTiming = t => Object.keys(TNAME).filter(k => t[k] != null).map(k => `${TNAME[k]} ${t[k].toFixed(1)} s`).join(' · ') + (t.total ? ` · total ${t.total.toFixed(1)} s` : '');
+const fmtTiming = t => Object.keys(TNAME).filter(k => t[k] != null).map(k => `${TNAME[k]} ${t[k].toFixed(1)} s`).join(' · ') + (t.intentos ? ` (${t.intentos} intento${t.intentos === 1 ? '' : 's'} de reconexión)` : '') + (t.total ? ` · total ${t.total.toFixed(1)} s` : '');
 /* Tiempo estimado de una medida con la última experiencia real */
 function estMeasure(cfg) {
   const lt = pref.get('lastTiming', null), acq = 4096/MODES[cfg.mode], n = (cfg.dirs || 'HVA').length*cfg.navg;
@@ -3295,7 +3303,7 @@ async function vSettings() {
           ${(() => { const lt = pref.get('lastTiming', null); return lt ? `<div class="kv">
               <span>Última medida</span><span>${fdate(lt.when)} · ${lt.ejes} capturas · ${esc(modeLabel(lt.mode).split(' · ')[0])}</span>
               <span>Total</span><span><b>${lt.total.toFixed(1)} s</b> (${(lt.total/lt.ejes).toFixed(1)} s por eje)</span>
-              ${Object.keys(TNAME).filter(k => lt[k] != null).map(k => `<span>${TNAME[k]}</span><span>${(lt[k]/lt.ejes).toFixed(2)} s por eje</span>`).join('')}</div>`
+              ${Object.keys(TNAME).filter(k => lt[k] != null).map(k => `<span>${TNAME[k]}</span><span>${(lt[k]/lt.ejes).toFixed(2)} s por eje</span>`).join('')}${lt.intentos ? `<span>intentos de reconexión</span><span>${(lt.intentos/lt.ejes).toFixed(1)} por eje</span>` : ''}</div>`
             : '<p class="note" style="margin-top:0">Haz una medida y aquí verás cuánto tarda cada fase.</p>'; })()}
           <div class="row" style="margin-top:12px"><button class="sm" id="bSim">Probar captura simultánea de 3 ejes</button></div>
           <div class="pmsg" id="simMsg"></div>
